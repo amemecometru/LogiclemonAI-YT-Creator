@@ -1,31 +1,18 @@
-This project was created as a learning exercise to understand how multiple AI agents work together through orchestration. It demonstrates the coordination between different specialized agents (Research and Writer) and how they can be orchestrated to create a cohesive content creation pipeline, providing insights into multi-agent system architecture and workflow management.
+# LogiclemonAI - Content Creator
 
-# Content Creation Pipeline MVP
-
-A simple but robust MVP implementation of an AI-powered content creation pipeline using multi-agent architecture.
+A production-grade AI-powered YouTube content creation pipeline. Research topics, write scripts, optimize SEO, design thumbnails, and scale your YouTube channel - all automated.
 
 ## Features
 
-- **Multi-Agent System**: Research and Writer agents working in coordination
-- **RESTful API**: FastAPI-based API for content creation
-- **Database Integration**: Supabase integration for data persistence
-- **Quality Assessment**: Basic quality scoring for generated content
-- **Async Processing**: Background task processing for content generation
-- **Clean Architecture**: Modular, testable, and extensible codebase
-
-## Architecture
-
-```
-┌─────────────────────────────────────────┐
-│              FastAPI App                │
-├─────────────────────────────────────────┤
-│           Content Orchestrator          │
-├─────────────────────────────────────────┤
-│  Research Agent    │    Writer Agent    │
-├─────────────────────────────────────────┤
-│            Supabase Database            │
-└─────────────────────────────────────────┘
-```
+- **🎬 Script Writing** - YouTube-optimized scripts with hooks, retention patterns, timestamps
+- **🔍 Smart Research** - AI-powered research via Tavily + Firecrawl
+- **📈 YouTube SEO** - Title optimization, tag generation, description with chapters
+- **🖼️ Thumbnail Design** - AI-generated thumbnail concepts with composition guides
+- **📋 Content Planning** - AI-generated content calendars for your niche
+- **⚡ Batch Processing** - Create multiple videos at scale
+- **🎯 CLI & Dashboard** - Full CLI tool + Web dashboard for managing your pipeline
+- **📤 YouTube Publishing** - Upload, schedule, and manage videos via YouTube API
+- **📊 Analytics** - Track video performance metrics
 
 ## Quick Start
 
@@ -33,213 +20,178 @@ A simple but robust MVP implementation of an AI-powered content creation pipelin
 
 - Python 3.11+
 - OpenAI API key
+- (Optional) Tavily API key for research
+- (Optional) Google Cloud OAuth 2.0 credentials for YouTube upload
 
 ### Installation
 
-1. **Clone and setup environment:**
-   ```bash
-   git clone <repository>
-   cd content-pipeline
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
+```bash
+git clone <repository>
+cd LogiclemonAI
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-2. **Configure environment:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your API keys and configuration
-   ```
-
-3. **Set up database:**
-   The database schema is already created via Supabase MCP. The tables include:
-   - `organizations`
-   - `users`
-   - `content_requests`
-   - `content_pieces`
-   - `agent_tasks`
-   - `quality_assessments`
-
-4. **Run the application:**
-   ```bash
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-   ```
-
-5. **Access the API:**
-   - API Documentation: http://localhost:8000/docs
-   - Health Check: http://localhost:8000/health
-
-## API Usage
-
-### Create Content
+### Configuration
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/content/create" \
+cp .env.example .env
+# Edit .env with your API keys
+```
+
+Required:
+- `OPENAI_API_KEY` - Your OpenAI API key
+
+Optional but recommended:
+- `TAVILY_API_KEY` - For web research
+- `YT_CLIENT_SECRET_FILE` - Google OAuth client_secret.json for YouTube uploads
+
+### Usage
+
+#### Web Dashboard
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+Open http://localhost:8000/dashboard
+
+#### CLI Tool
+```bash
+# Create a single video script
+python -m app.cli create "How AI is Transforming Healthcare" --audience "tech enthusiasts" --show-script
+
+# Batch create from topics file
+python -m app.cli batch topics.txt --niche technology --output results.json
+
+# Generate a monthly content plan
+python -m app.cli plan "Machine Learning" --month "July 2025" --num 12
+
+# Export script for TTS/narration
+python -m app.cli export results.json --format tts --output narration.txt
+```
+
+#### API
+```bash
+# Create YouTube video content
+curl -X POST "http://localhost:8000/api/v1/yt/create" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "test-user-123",
-    "topic": "artificial intelligence in healthcare",
-    "content_type": "blog_post",
-    "target_audience": "healthcare professionals",
-    "word_count": 800,
-    "style_requirements": {
-      "tone": "professional",
-      "include_statistics": true
-    }
+    "topic": "How AI is Transforming Healthcare",
+    "target_audience": "tech enthusiasts",
+    "video_length": "medium",
+    "tone": "professional",
+    "niche": "technology"
   }'
 ```
 
-### Get Content Status
+## Pipeline Architecture
 
-```bash
-curl "http://localhost:8000/api/v1/content/{content_id}/status"
 ```
-
-### Retrieve Generated Content
-
-```bash
-curl "http://localhost:8000/api/v1/content/{content_id}"
-```
-
-### List All Content
-
-```bash
-curl "http://localhost:8000/api/v1/content?limit=10&offset=0"
+┌─────────────────────────────────────────────────────┐
+│                    Input Topic                       │
+└────────────────────┬────────────────────────────────┘
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│              1. Research Agent (Tavily + AI)         │
+│     Gathers sources, key findings, statistics        │
+└────────────────────┬────────────────────────────────┘
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│            2. Script Writer Agent (OpenAI)           │
+│   Hook, sections with timestamps, conclusion, CTA   │
+└────────────────────┬────────────────────────────────┘
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│            3. YouTube SEO Agent (OpenAI)             │
+│  Title optimization, tags, description, chapters    │
+└────────────────────┬────────────────────────────────┘
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│            4. Thumbnail Agent (OpenAI)               │
+│   Concept, composition, colors, text overlay        │
+└────────────────────┬────────────────────────────────┘
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│             5. Final Output Package                  │
+│  Full script + SEO metadata + Thumbnail design      │
+└─────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
 
 ```
-content-pipeline/
+LogiclemonAI/
 ├── app/
 │   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── base_agent.py          # Abstract base class for agents
-│   │   ├── research_agent.py      # Research and information gathering
-│   │   └── writer_agent.py        # Content creation and writing
+│   │   ├── base_agent.py          # Abstract base class
+│   │   ├── research_agent.py      # Tavily + Firecrawl research
+│   │   ├── writer_agent.py        # Blog/article writer
+│   │   ├── script_writer_agent.py # YouTube script writer
+│   │   ├── youtube_seo_agent.py   # YouTube SEO optimizer
+│   │   └── thumbnail_agent.py     # Thumbnail designer
 │   ├── core/
-│   │   ├── __init__.py
-│   │   └── orchestrator.py        # Main pipeline coordinator
+│   │   ├── orchestrator.py        # Original content orchestrator
+│   │   └── yt_pipeline.py         # YouTube pipeline orchestrator
 │   ├── models/
-│   │   ├── __init__.py
-│   │   └── content.py             # Pydantic models and enums
-│   ├── config.py                  # Configuration management
-│   └── main.py                    # FastAPI application
+│   │   ├── content.py             # Original content models
+│   │   └── youtube.py             # YouTube-specific models
+│   ├── services/
+│   │   ├── database_service.py    # Supabase integration
+│   │   └── youtube_service.py     # YouTube API v3 integration
+│   ├── dashboard.py               # API router for YT endpoints
+│   ├── cli.py                     # Command-line interface
+│   ├── scheduler.py               # Upload scheduling system
+│   ├── main.py                    # FastAPI application
+│   ├── config.py                  # Configuration
+│   └── static/
+│       └── index.html             # Web dashboard
 ├── tests/
-│   ├── __init__.py
-│   ├── conftest.py               # Test configuration and fixtures
-│   ├── test_agents.py            # Agent tests
-│   └── test_orchestrator.py      # Orchestrator tests
+│   ├── test_agents.py
+│   ├── test_orchestrator.py
+│   ├── test_yt_pipeline.py
+│   ├── test_script_writer.py
+│   ├── test_seo_agent.py
+│   ├── test_thumbnail_agent.py
+│   └── test_cli.py
 ├── requirements.txt
 ├── .env.example
 └── README.md
 ```
 
-## Agent Details
-
-### Research Agent
-- **Purpose**: Gathers information and validates sources
-- **Capabilities**:
-  - Wikipedia API integration
-  - Search query generation
-  - Source credibility scoring
-  - Information structuring using AI
-
-### Writer Agent
-- **Purpose**: Creates structured, engaging content
-- **Capabilities**:
-  - Content outline generation
-  - Multi-section writing
-  - Style adaptation
-  - Metadata generation
-  - Reading time calculation
-
 ## Testing
 
-Run the test suite:
-
 ```bash
-# Install test dependencies
-pip install pytest pytest-asyncio pytest-cov
-
 # Run all tests
 pytest
 
 # Run with coverage
-pytest --cov=app --cov-report=html
+pytest --cov=app --cov-report=term-missing
 
 # Run specific test file
-pytest tests/test_agents.py -v
+pytest tests/test_yt_pipeline.py -v
 ```
 
-## Configuration
+## YouTube API Setup
 
-### Environment Variables
+To enable YouTube upload and analytics:
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key for AI agents | Required |
-| `DATABASE_URL` | Supabase database connection string | Required |
-| `REDIS_URL` | Redis connection for caching | `redis://localhost:6379` |
-| `MAX_CONTENT_LENGTH` | Maximum content word count | `5000` |
-| `DEFAULT_QUALITY_THRESHOLD` | Minimum quality score | `0.7` |
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Create a new project or select existing
+3. Enable YouTube Data API v3
+4. Create OAuth 2.0 credentials (Desktop application type)
+5. Download `client_secret.json` to project root
+6. First upload will trigger OAuth flow (saves token to `yt_token.pickle`)
 
-### Content Types
+## Commercial Production Ready
 
-- `blog_post`: Conversational blog articles
-- `article`: Professional informative articles
-- `product_description`: Marketing-focused descriptions
-- `social_media`: Short, engaging posts
-- `email`: Personal, action-oriented content
-
-## Quality Metrics
-
-The system calculates several quality scores:
-
-- **Overall Quality**: Based on content length, research depth, and structure
-- **SEO Score**: Title length, meta description, headings, keyword usage
-- **Fact-Check Score**: Based on research confidence and source credibility
-- **Research Depth**: Number and quality of sources used
-
-## Error Handling
-
-The system includes comprehensive error handling:
-
-- Input validation
-- API timeout handling
-- Graceful degradation
-- Detailed error messages
-- Background task error recovery
-
-## Future Enhancements
-
-This MVP provides a solid foundation for adding:
-
-- Additional agents (SEO, Editor, Fact-Checker, Visual)
-- Advanced quality gates
-- User authentication and authorization
-- Rate limiting and usage tracking
-- Content templates and personalization
-- Multi-language support
-- Advanced analytics and reporting
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
+This pipeline is built for scale:
+- **Async architecture** handles concurrent video creation
+- **Graceful degradation** when APIs are unavailable
+- **Comprehensive error handling** at every stage
+- **Modular agents** can be extended or replaced
+- **Batch processing** for high-volume content operations
+- **Scheduling system** for automated publishing
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Support
-
-For questions or issues:
-1. Check the API documentation at `/docs`
-2. Review the test files for usage examples
-3. Check logs for detailed error information
-
-
+MIT

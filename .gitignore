@@ -126,6 +126,17 @@ htmlcov/
 *.swo
 *~
 
+# Generated outputs
+output_video_package.json
+upload_schedule.json
+
+# YouTube API credentials
+yt_token.pickle
+client_secret.json
+
+# Sample code
+sample-code-*
+
 # OS
 .DS_Store
 Thumbs.db

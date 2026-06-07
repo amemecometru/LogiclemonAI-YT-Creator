@@ -8,6 +8,7 @@ import os
 # Set test environment variables
 os.environ["OPENAI_API_KEY"] = "test-key"
 os.environ["DATABASE_URL"] = "sqlite:///test.db"
+os.environ["TAVILY_API_KEY"] = "test-tavily-key"
 
 
 @pytest.fixture(scope="session")
@@ -104,3 +105,53 @@ The future of healthcare lies in the integration of AI technologies.""",
             "content_type": "article"
         }
     }
+
+
+@pytest.fixture
+def sample_youtube_script():
+    """Sample YouTube script for testing."""
+    from app.models.youtube import VideoScript, ScriptSection
+    return VideoScript(
+        topic="AI in Healthcare",
+        title="How AI is Revolutionizing Healthcare",
+        hook="What if I told you AI can detect diseases before symptoms appear?",
+        sections=[
+            ScriptSection(timestamp="0:00", duration_seconds=30, title="The Problem", content="Healthcare faces many challenges."),
+            ScriptSection(timestamp="0:30", duration_seconds=120, title="How AI Helps", content="AI is transforming diagnostics."),
+            ScriptSection(timestamp="2:30", duration_seconds=60, title="Real Examples", content="Hospitals using AI today."),
+        ],
+        conclusion="AI will transform healthcare forever.",
+        call_to_action="Like and subscribe for more tech content!",
+        full_script="Full video script content here...",
+        estimated_duration_seconds=210,
+        word_count=350,
+        target_audience="tech enthusiasts",
+        tone="professional",
+        key_points=["AI improves diagnosis", "Reduces errors", "Saves costs"]
+    )
+
+
+@pytest.fixture
+def sample_youtube_metadata():
+    """Sample YouTube metadata for testing."""
+    from app.models.youtube import YouTubeMetadata
+    return YouTubeMetadata(
+        title="How AI is Revolutionizing Healthcare",
+        description="In this video, we explore how AI is transforming healthcare.\n\n0:00 - The Problem\n0:30 - How AI Helps\n2:30 - Real Examples",
+        tags=["AI", "healthcare", "artificial intelligence", "medical tech", "future of medicine"],
+        category_id=27
+    )
+
+
+@pytest.fixture
+def sample_thumbnail_design():
+    """Sample thumbnail design for testing."""
+    from app.models.youtube import ThumbnailDesign
+    return ThumbnailDesign(
+        video_title="How AI is Revolutionizing Healthcare",
+        concept_description="A split screen showing a doctor on one side and an AI interface on the other, with a surprised expression.",
+        composition_guide="Left third: doctor's face with surprised expression. Right third: AI diagnostic screen. Center: bold text.",
+        color_scheme=["#007AFF", "#FF3B30", "#FFFFFF", "#000000"],
+        text_overlay="AI DOCTOR?",
+        style_notes="High contrast, modern tech aesthetic."
+    )

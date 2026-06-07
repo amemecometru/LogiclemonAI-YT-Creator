@@ -14,22 +14,27 @@ from tavily import TavilyClient
 
 
 class ResearchAgent(BaseAgent):
-    """Enhanced research agent using Tavily AI Search and Firecrawl web scraping."""
-    
+    """Enhanced research agent using Tavily AI Search and Firecrawl web scraping.
+    Falls back to LLM-based research when external search APIs are not configured."""
+
     def __init__(self):
         super().__init__(AgentType.RESEARCH)
-        
-        # Initialize API clients
+
         self.tavily_api_key = os.getenv("TAVILY_API_KEY", "")
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
-        
-        # Initialize Tavily client
-        self.tavily_client = TavilyClient(api_key=self.tavily_api_key)
 
-            
-        # Firecrawl API endpoint
+        self.tavily_client = None
+        if self.tavily_api_key:
+            try:
+                from tavily import TavilyClient
+                self.tavily_client = TavilyClient(api_key=self.tavily_api_key)
+            except Exception as e:
+                print(f"⚠️  Tavily init failed: {e}")
+
         self.firecrawl_base_url = "https://api.firecrawl.dev/v0"
-        
+
+        if not self.tavily_client:
+            print("⚠️  Tavily not configured - will use LLM-based research fallback")
         if not self.firecrawl_api_key or self.firecrawl_api_key == "your-firecrawl-api-key-here":
             print("⚠️  Firecrawl API key not configured")
         
@@ -38,41 +43,52 @@ class ResearchAgent(BaseAgent):
         self.update_status(ContentStatus.PROCESSING)
         
         try:
-            # Validate input
             if not await self.validate_input(input_data):
                 raise ValueError("Invalid input data for research agent")
-            
+
             topic = input_data.get("topic", "")
             max_results = input_data.get("max_results", 10)
             include_domains = input_data.get("include_domains", [])
             exclude_domains = input_data.get("exclude_domains", [])
-            search_depth = input_data.get("search_depth", "basic")  # basic or advanced
-            
+
             print(f"🔍 Starting research for: '{topic}'")
-            
-            # Step 1: Use Tavily for AI-powered search
-            tavily_results = await self._search_with_tavily(topic, max_results, include_domains, exclude_domains)
-            
-            # Step 2: Use Firecrawl for additional web scraping if needed
-            firecrawl_results = await self._scrape_with_firecrawl(topic, max_results // 2)
-            
-            # Step 3: Combine and process all results
-            all_results = tavily_results + firecrawl_results
-            
-            # Step 4: Structure findings using AI
+
+            all_results = []
+
+            if self.tavily_client:
+                tavily_results = await self._search_with_tavily(topic, max_results, include_domains, exclude_domains)
+                all_results.extend(tavily_results)
+
+            if self.firecrawl_api_key and self.firecrawl_api_key != "your-firecrawl-api-key-here":
+                firecrawl_results = await self._scrape_with_firecrawl(topic, max_results // 2)
+                all_results.extend(firecrawl_results)
+
+            if not all_results:
+                print("ℹ️  No external search APIs available, using LLM-based research")
+                structured_research = await self._llm_research(topic)
+                self.update_status(ContentStatus.COMPLETED)
+                return {
+                    "status": "success",
+                    "research_data": structured_research,
+                    "confidence_score": structured_research.get("confidence_score", 0.6),
+                    "sources_found": 0,
+                    "tavily_sources": 0,
+                    "firecrawl_sources": 0,
+                    "research_method": "llm"
+                }
+
             structured_research = await self._structure_enhanced_findings(all_results, topic)
-            
+
             self.update_status(ContentStatus.COMPLETED)
-            
             print(f"✅ Research completed: {len(all_results)} sources found")
-            
+
             return {
                 "status": "success",
                 "research_data": structured_research,
                 "confidence_score": self._calculate_enhanced_confidence(structured_research),
                 "sources_found": len(all_results),
-                "tavily_sources": len(tavily_results),
-                "firecrawl_sources": len(firecrawl_results)
+                "tavily_sources": len([r for r in all_results if r.get("source") == "Tavily Search"]),
+                "firecrawl_sources": len([r for r in all_results if r.get("source") == "Firecrawl Scraper"])
             }
             
         except Exception as e:
@@ -89,6 +105,72 @@ class ResearchAgent(BaseAgent):
         required_fields = ["topic"]
         return all(field in input_data and input_data[field] for field in required_fields)
     
+    async def _llm_research(self, topic: str) -> Dict[str, Any]:
+        """LLM-based research fallback when no search APIs are available."""
+        prompt = f"""You are a research assistant. Provide comprehensive research about "{topic}".
+
+Return a JSON object with this exact structure:
+{{
+    "key_findings": ["finding 1", "finding 2", "finding 3", "finding 4", "finding 5"],
+    "main_arguments": ["argument 1", "argument 2", "argument 3"],
+    "statistics": [
+        {{"statistic": "description", "value": "number/percentage", "source": "source name"}}
+    ],
+    "expert_opinions": [
+        {{"opinion": "expert view", "expert": "expert name", "source": "publication"}}
+    ],
+    "recent_developments": ["development 1", "development 2"],
+    "practical_applications": ["application 1", "application 2"],
+    "challenges_limitations": ["challenge 1", "challenge 2"]
+}}
+
+Base your research on well-known facts and common knowledge about this topic.
+Include specific statistics, examples, and real-world applications.
+Return ONLY valid JSON."""
+
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response = await self.call_openai(messages, max_tokens=2000)
+            response = response.strip()
+            if response.startswith("```json"):
+                response = response[7:]
+            if response.endswith("```"):
+                response = response[:-3]
+            data = json.loads(response.strip())
+
+            return {
+                "key_findings": data.get("key_findings", [f"Key insight about {topic}"]),
+                "main_arguments": data.get("main_arguments", []),
+                "sources": [{"title": f"{topic} - Research Summary", "url": "", "source": "AI Research", "credibility_score": 0.7}],
+                "statistics": data.get("statistics", []),
+                "expert_opinions": data.get("expert_opinions", []),
+                "confidence_score": 0.6,
+                "recent_developments": data.get("recent_developments", []),
+                "practical_applications": data.get("practical_applications", []),
+                "challenges_limitations": data.get("challenges_limitations", []),
+                "source_diversity": 1,
+                "total_sources": 1,
+                "avg_credibility": 0.7,
+                "has_recent_content": False
+            }
+        except Exception as e:
+            print(f"LLM research failed: {e}")
+            return {
+                "key_findings": [f"{topic} is an important topic with many applications"],
+                "main_arguments": [],
+                "sources": [],
+                "statistics": [],
+                "expert_opinions": [],
+                "confidence_score": 0.5,
+                "recent_developments": [],
+                "practical_applications": [],
+                "challenges_limitations": [],
+                "source_diversity": 0,
+                "total_sources": 0,
+                "avg_credibility": 0.5,
+                "has_recent_content": False
+            }
+
     async def _search_with_tavily(self, topic: str, max_results: int = 10, 
                                  include_domains: List[str] = None, 
                                  exclude_domains: List[str] = None) -> List[Dict[str, Any]]:

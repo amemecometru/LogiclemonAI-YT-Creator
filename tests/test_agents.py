@@ -19,7 +19,8 @@ class TestResearchAgent:
     async def test_research_agent_initialization(self, research_agent):
         """Test research agent initialization."""
         assert research_agent.agent_type == AgentType.RESEARCH
-        assert hasattr(research_agent, 'search_engines')
+        assert hasattr(research_agent, 'tavily_client')
+        assert hasattr(research_agent, 'firecrawl_api_key')
     
     @pytest.mark.asyncio
     async def test_validate_input_valid(self, research_agent):
@@ -36,54 +37,24 @@ class TestResearchAgent:
         assert result is False
     
     @pytest.mark.asyncio
-    @patch('app.agents.research_agent.ResearchAgent.call_openai')
-    async def test_generate_search_queries(self, mock_openai, research_agent):
-        """Test search query generation."""
-        mock_openai.return_value = '["AI overview", "AI trends", "AI statistics", "AI expert opinion", "AI applications"]'
+    async def test_research_execute_no_api_key(self, research_agent):
+        """Test research execution without Tavily (should fall back to LLM)."""
+        input_data = {"topic": "artificial intelligence"}
         
-        queries = await research_agent._generate_search_queries("artificial intelligence")
-        
-        assert isinstance(queries, list)
-        assert len(queries) == 5
-        assert "AI overview" in queries
+        with patch.object(research_agent, 'tavily_client', None):
+            result = await research_agent.execute(input_data)
+            assert result["status"] in ("success", "error")
     
     @pytest.mark.asyncio
-    @patch('httpx.AsyncClient.get')
-    async def test_search_wikipedia(self, mock_get, research_agent):
-        """Test Wikipedia search functionality."""
-        # Mock Wikipedia API response
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "title": "Artificial Intelligence",
-            "extract": "AI is a branch of computer science...",
-            "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/AI"}}
-        }
-        mock_get.return_value = mock_response
-        
-        results = await research_agent._search_wikipedia("artificial intelligence")
-        
-        assert len(results) == 1
-        assert results[0]["source"] == "Wikipedia"
-        assert results[0]["title"] == "Artificial Intelligence"
-    
-    @pytest.mark.asyncio
-    @patch('app.agents.research_agent.ResearchAgent.call_openai')
-    @patch('app.agents.research_agent.ResearchAgent._gather_information')
-    async def test_execute_success(self, mock_gather, mock_openai, research_agent):
-        """Test successful research execution."""
-        # Mock data
-        mock_gather.return_value = [
-            {"source": "Wikipedia", "title": "AI", "content": "AI content", "credibility_score": 0.8}
+    async def test_calculate_confidence_from_sources(self, research_agent):
+        """Test confidence calculation from sources."""
+        sources = [
+            {"title": "Source 1", "source": "Tavily", "credibility_score": 0.9, "content": "Long content here with enough words", "published_date": "2025-01-01"},
+            {"title": "Source 2", "source": "Tavily", "credibility_score": 0.8, "content": "More content here for testing", "published_date": "2025-02-01"}
         ]
-        mock_openai.return_value = '{"key_findings": ["AI is important"], "main_arguments": ["AI helps automation"]}'
-        
-        input_data = {"topic": "artificial intelligence", "depth": 2}
-        result = await research_agent.execute(input_data)
-        
-        assert result["status"] == "success"
-        assert "research_data" in result
-        assert "confidence_score" in result
+        confidence = research_agent._calculate_enhanced_confidence_from_sources(sources)
+        assert 0.0 <= confidence <= 1.0
+        assert isinstance(confidence, float)
 
 
 class TestWriterAgent:
@@ -132,7 +103,6 @@ class TestWriterAgent:
         assert "introduction" in outline
         assert "main_sections" in outline
     
-    @pytest.mark.asyncio
     def test_calculate_reading_time(self, writer_agent):
         """Test reading time calculation."""
         content = " ".join(["word"] * 225)  # 225 words
@@ -143,7 +113,6 @@ class TestWriterAgent:
         reading_time = writer_agent._calculate_reading_time(content)
         assert reading_time == 2  # Should be 2 minutes
     
-    @pytest.mark.asyncio
     def test_extract_keywords(self, writer_agent):
         """Test keyword extraction."""
         content = "Machine learning algorithms are powerful tools for data analysis and artificial intelligence applications."

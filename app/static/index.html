@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogiclemonAI - Content Creator Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f0f0f;
+            color: #eee;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid #333;
+        }
+        .header h1 { font-size: 1.5rem; color: #ff4444; }
+        .header p { color: #888; margin-top: 0.25rem; font-size: 0.875rem; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .card {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 { font-size: 1.125rem; margin-bottom: 1rem; color: #fff; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.375rem; color: #aaa; font-size: 0.875rem; }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 0.625rem;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 0.875rem;
+        }
+        .form-group textarea { min-height: 80px; font-family: inherit; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+        .btn {
+            padding: 0.625rem 1.25rem;
+            border: none;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn-primary { background: #ff4444; color: #fff; }
+        .btn-secondary { background: #333; color: #fff; }
+        .btn-success { background: #22c55e; color: #fff; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .progress-bar {
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            margin: 1rem 0;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ff8800);
+            transition: width 0.5s;
+            border-radius: 2px;
+        }
+        .result-area {
+            background: #0d0d0d;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 1rem;
+            font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8125rem;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-top: 0.5rem;
+        }
+        .tabs { display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 1px solid #333; }
+        .tab {
+            padding: 0.625rem 1.25rem;
+            cursor: pointer;
+            color: #888;
+            border-bottom: 2px solid transparent;
+            font-size: 0.875rem;
+        }
+        .tab.active { color: #ff4444; border-bottom-color: #ff4444; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .status-badge {
+            display: inline-block;
+            padding: 0.1875rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .status-success { background: #22c55e20; color: #22c55e; border: 1px solid #22c55e; }
+        .status-error { background: #ef444420; color: #ef4444; border: 1px solid #ef4444; }
+        .status-processing { background: #f59e0b20; color: #f59e0b; border: 1px solid #f59e0b; }
+        ul { list-style: none; }
+        ul li { padding: 0.5rem 0; border-bottom: 1px solid #222; font-size: 0.875rem; }
+        ul li:last-child { border-bottom: none; }
+        .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        .meta-item { background: #222; padding: 0.5rem; border-radius: 4px; }
+        .meta-item .label { color: #888; font-size: 0.75rem; }
+        .meta-item .value { color: #fff; font-size: 0.875rem; margin-top: 0.125rem; }
+        @media (max-width: 768px) {
+            .form-row { grid-template-columns: 1fr; }
+            .container { padding: 1rem; }
+            .meta-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🦎 LogiclemonAI</h1>
+        <p>YouTube Content Creation Pipeline - Dashboard</p>
+    </div>
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('create')">Create Video</div>
+            <div class="tab" onclick="switchTab('batch')">Batch</div>
+            <div class="tab" onclick="switchTab('plan')">Content Plan</div>
+            <div class="tab" onclick="switchTab('tasks')">Active Tasks</div>
+        </div>
+
+        <div id="tab-create" class="tab-content active">
+            <div class="card">
+                <h2>Create a Video Script</h2>
+                <div class="form-group">
+                    <label>Topic</label>
+                    <input type="text" id="topic" placeholder="e.g., How AI is Transforming Healthcare" />
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Target Audience</label>
+                        <input type="text" id="audience" value="tech enthusiasts" />
+                    </div>
+                    <div class="form-group">
+                        <label>Video Length</label>
+                        <select id="length">
+                            <option value="short">Short (1 min)</option>
+                            <option value="medium" selected>Medium (8 min)</option>
+                            <option value="long">Long (20 min)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Tone</label>
+                        <select id="tone">
+                            <option value="professional">Professional</option>
+                            <option value="casual">Casual</option>
+                            <option value="educational">Educational</option>
+                            <option value="entertaining">Entertaining</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="createVideo()">Generate Video Content</button>
+                <div id="create-progress" style="display:none;">
+                    <div class="progress-bar"><div class="progress-bar-fill" id="create-fill"></div></div>
+                    <p id="create-status" style="font-size:0.875rem;color:#888;"></p>
+                </div>
+                <div id="create-result"></div>
+            </div>
+        </div>
+
+        <div id="tab-batch" class="tab-content">
+            <div class="card">
+                <h2>Batch Create</h2>
+                <div class="form-group">
+                    <label>Topics (one per line)</label>
+                    <textarea id="batch-topics" placeholder="AI in Healthcare&#10;Machine Learning Basics&#10;Future of Robotics"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Audience</label>
+                        <input type="text" id="batch-audience" value="general" />
+                    </div>
+                    <div class="form-group">
+                        <label>Length</label>
+                        <select id="batch-length"><option value="medium">Medium</option><option value="short">Short</option><option value="long">Long</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Niche</label>
+                        <input type="text" id="batch-niche" value="technology" />
+                    </div>
+                </div>
+                <button class="btn btn-success" onclick="batchCreate()">Batch Generate</button>
+                <div id="batch-result"></div>
+            </div>
+        </div>
+
+        <div id="tab-plan" class="tab-content">
+            <div class="card">
+                <h2>Content Plan Generator</h2>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Niche</label>
+                        <input type="text" id="plan-niche" placeholder="e.g., Machine Learning" />
+                    </div>
+                    <div class="form-group">
+                        <label>Month</label>
+                        <input type="text" id="plan-month" placeholder="e.g., July 2025" />
+                    </div>
+                    <div class="form-group">
+                        <label>Number of Ideas</label>
+                        <input type="number" id="plan-num" value="8" />
+                    </div>
+                </div>
+                <button class="btn btn-secondary" onclick="generatePlan()">Generate Plan</button>
+                <div id="plan-result"></div>
+            </div>
+        </div>
+
+        <div id="tab-tasks" class="tab-content">
+            <div class="card">
+                <h2>Active Tasks</h2>
+                <button class="btn btn-secondary" onclick="refreshTasks()" style="margin-bottom:1rem;">Refresh</button>
+                <div id="tasks-list">No active tasks.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/api/v1/yt';
+
+        function switchTab(name) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab[onclick*="${name}"]`).classList.add('active');
+            document.getElementById(`tab-${name}`).classList.add('active');
+        }
+
+        function showResult(containerId, data) {
+            const el = document.getElementById(containerId);
+            const status = data.status === 'success' ? '✅ Success' : '❌ Failed';
+            const statusClass = data.status === 'success' ? 'status-success' : 'status-error';
+            let html = `<p><span class="status-badge ${statusClass}">${status}</span></p>`;
+
+            if (data.status === 'success') {
+                const script = data.script || {};
+                const meta = data.metadata || {};
+                const thumb = data.thumbnail_design || {};
+                html += `<div class="meta-grid" style="margin-top:0.75rem;">
+                    <div class="meta-item"><div class="label">Title</div><div class="value">${script.title || 'N/A'}</div></div>
+                    <div class="meta-item"><div class="label">Words</div><div class="value">${script.word_count || 0}</div></div>
+                    <div class="meta-item"><div class="label">Duration</div><div class="value">~${script.estimated_duration_seconds || 0}s</div></div>
+                    <div class="meta-item"><div class="label">Execution</div><div class="value">${data.execution_time || 0}s</div></div>
+                </div>`;
+                if (thumb.concept_description) {
+                    html += `<p style="margin-top:0.75rem;"><strong>Thumbnail:</strong> ${thumb.concept_description.substring(0, 200)}...</p>`;
+                }
+                html += `<button class="btn btn-secondary" style="margin-top:0.75rem;" onclick="showFullScript(this, '${encodeURIComponent(JSON.stringify(script).replace(/'/g, "&#39;"))}')">Show Full Script</button>`;
+                if (meta.description) {
+                    html += `<button class="btn btn-secondary" style="margin-top:0.75rem;margin-left:0.5rem;" onclick="showDescription(this, '${encodeURIComponent(JSON.stringify(meta).replace(/'/g, "&#39;"))}')">Show Description</button>`;
+                }
+                html += `<div class="result-area" style="display:none;margin-top:0.75rem;"></div>`;
+            } else {
+                html += `<p style="color:#ef4444;margin-top:0.5rem;">${data.message || 'Unknown error'}</p>`;
+            }
+            el.innerHTML = html;
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function showFullScript(btn, scriptJson) {
+            const script = JSON.parse(decodeURIComponent(scriptJson));
+            const area = btn.parentElement.querySelector('.result-area');
+            if (area.style.display === 'none') {
+                area.style.display = 'block';
+                area.textContent = script.full_script || 'No script content';
+                btn.textContent = 'Hide Script';
+            } else {
+                area.style.display = 'none';
+                btn.textContent = 'Show Full Script';
+            }
+        }
+
+        function showDescription(btn, metaJson) {
+            const meta = JSON.parse(decodeURIComponent(metaJson));
+            const area = btn.parentElement.querySelector('.result-area');
+            if (area.style.display === 'none') {
+                area.style.display = 'block';
+                area.textContent = meta.description || 'No description';
+                btn.textContent = 'Hide Description';
+            } else {
+                area.style.display = 'none';
+                btn.textContent = 'Show Description';
+            }
+        }
+
+        async function createVideo() {
+            const btn = document.querySelector('#tab-create .btn-primary');
+            btn.disabled = true;
+            document.getElementById('create-progress').style.display = 'block';
+            document.getElementById('create-result').innerHTML = '';
+
+            const progressFill = document.getElementById('create-fill');
+            const statusEl = document.getElementById('create-status');
+
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress = Math.min(progress + 2, 90);
+                progressFill.style.width = progress + '%';
+                statusEl.textContent = 'Processing...';
+            }, 2000);
+
+            try {
+                const resp = await fetch(`${API}/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        topic: document.getElementById('topic').value,
+                        target_audience: document.getElementById('audience').value,
+                        video_length: document.getElementById('length').value,
+                        tone: document.getElementById('tone').value,
+                        niche: document.getElementById('audience').value
+                    })
+                });
+                const data = await resp.json();
+                clearInterval(interval);
+                progressFill.style.width = '100%';
+                statusEl.textContent = data.status === 'success' ? '✅ Complete!' : '❌ Failed';
+                setTimeout(() => {
+                    document.getElementById('create-progress').style.display = 'none';
+                    showResult('create-result', data);
+                }, 500);
+            } catch (err) {
+                clearInterval(interval);
+                statusEl.textContent = 'Error: ' + err.message;
+            }
+            btn.disabled = false;
+        }
+
+        async function batchCreate() {
+            const topics = document.getElementById('batch-topics').value.split('\n').filter(t => t.trim());
+            const btn = document.querySelector('#tab-batch .btn-success');
+            btn.disabled = true;
+            document.getElementById('batch-result').innerHTML = '<p>Processing batch...</p>';
+
+            try {
+                const url = `${API}/batch?target_audience=${encodeURIComponent(document.getElementById('batch-audience').value)}&video_length=${document.getElementById('batch-length').value}&niche=${encodeURIComponent(document.getElementById('batch-niche').value)}`;
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(topics)
+                });
+                const data = await resp.json();
+                let html = `<p><span class="status-badge ${data.success_count === data.total ? 'status-success' : 'status-processing'}">${data.success_count}/${data.total} succeeded</span></p>`;
+                data.results.forEach((r, i) => {
+                    const sc = r.status === 'success' ? '✅' : '❌';
+                    html += `<p>${sc} ${r.topic || 'Topic ' + (i+1)}: ${r.status} ${r.execution_time ? '(' + r.execution_time + 's)' : ''}</p>`;
+                });
+                document.getElementById('batch-result').innerHTML = html;
+            } catch (err) {
+                document.getElementById('batch-result').innerHTML = `<p style="color:#ef4444;">Error: ${err.message}</p>`;
+            }
+            btn.disabled = false;
+        }
+
+        async function generatePlan() {
+            const btn = document.querySelector('#tab-plan .btn-secondary');
+            btn.disabled = true;
+            document.getElementById('plan-result').innerHTML = '<p>Generating plan...</p>';
+
+            try {
+                const url = `${API}/plan?niche=${encodeURIComponent(document.getElementById('plan-niche').value)}&month=${encodeURIComponent(document.getElementById('plan-month').value)}&num_videos=${document.getElementById('plan-num').value}`;
+                const resp = await fetch(url, { method: 'POST' });
+                const data = await resp.json();
+
+                if (data.status === 'success') {
+                    const videos = data.plan.videos || [];
+                    let html = `<p><span class="status-badge status-success">${videos.length} ideas generated</span></p><ul>`;
+                    videos.forEach(v => {
+                        html += `<li><strong>${v.title}</strong><br><span style="color:#888;font-size:0.8rem;">Keywords: ${(v.keywords || []).join(', ')}</span></li>`;
+                    });
+                    html += '</ul>';
+                    document.getElementById('plan-result').innerHTML = html;
+                } else {
+                    document.getElementById('plan-result').innerHTML = `<p style="color:#ef4444;">${data.message || 'Generation failed'}</p>`;
+                }
+            } catch (err) {
+                document.getElementById('plan-result').innerHTML = `<p style="color:#ef4444;">Error: ${err.message}</p>`;
+            }
+            btn.disabled = false;
+        }
+
+        async function refreshTasks() {
+            try {
+                const resp = await fetch(`${API}/tasks`);
+                const data = await resp.json();
+                const tasks = data.active_tasks || [];
+                if (tasks.length === 0) {
+                    document.getElementById('tasks-list').innerHTML = 'No active tasks.';
+                    return;
+                }
+                let html = '<ul>';
+                tasks.forEach(t => {
+                    const sc = t.status === 'completed' ? 'status-success' : t.status === 'failed' ? 'status-error' : 'status-processing';
+                    html += `<li><span class="status-badge ${sc}">${t.status}</span> <strong>${t.task_id}</strong> - ${t.current_agent || 'idle'} (${t.progress || 0}%) - ${t.elapsed_time ? Math.round(t.elapsed_time) + 's' : ''}</li>`;
+                });
+                html += '</ul>';
+                document.getElementById('tasks-list').innerHTML = html;
+            } catch (err) {
+                document.getElementById('tasks-list').innerHTML = `<p style="color:#ef4444;">Error: ${err.message}</p>`;
+            }
+        }
+
+        setInterval(refreshTasks, 5000);
+    </script>
+</body>
+</html>

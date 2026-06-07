@@ -1,119 +1,115 @@
-"""Main FastAPI application for Content Creation Pipeline."""
+"""Main FastAPI application for LogiclemonAI - Content Creator Pipeline."""
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from typing import Dict, Any
 import time
 import uuid
+import os
 from datetime import datetime
 from app.config import settings
 from app.models.content import ContentRequest, ContentType, ContentStatus
 from app.core.orchestrator import ContentOrchestrator
+from app.core.yt_pipeline import YTPipeline
 from app.services.database_service import DatabaseService
+from app.dashboard import router as yt_router
 
-# Initialize FastAPI app
 app = FastAPI(
-    title=settings.app_name,
+    title="LogiclemonAI - Content Creator",
     version=settings.app_version,
-    description="AI-powered content creation pipeline with multi-agent system"
+    description="AI-powered YouTube content creation pipeline with multi-agent system"
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize services
 orchestrator = ContentOrchestrator()
+yt_pipeline = YTPipeline()
 db_service = DatabaseService()
+
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/dashboard", StaticFiles(directory=static_dir, html=True), name="dashboard")
+
+app.include_router(yt_router)
 
 
 @app.get("/")
 async def root():
-    """Root endpoint with API information."""
     return {
-        "message": "Content Creation Pipeline API",
+        "message": "LogiclemonAI - Content Creator API",
         "version": settings.app_version,
         "status": "running",
         "endpoints": {
             "create_content": "/api/v1/content/create",
             "get_content": "/api/v1/content/{content_id}",
             "get_status": "/api/v1/content/{content_id}/status",
-            "health": "/health"
+            "health": "/health",
+            "yt_create": "/api/v1/yt/create",
+            "yt_plan": "/api/v1/yt/plan",
+            "yt_tasks": "/api/v1/yt/tasks",
+            "yt_batch": "/api/v1/yt/batch",
+            "dashboard": "/dashboard"
         }
     }
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
     db_healthy = await db_service.health_check()
     return {
-        "status": "healthy" if db_healthy else "unhealthy",
+        "status": "healthy" if db_healthy else "degraded",
         "timestamp": time.time(),
         "version": settings.app_version,
-        "database": "connected" if db_healthy else "disconnected"
+        "database": "connected" if db_healthy else "disconnected",
+        "pipelines": {
+            "content": "ready",
+            "youtube": "ready"
+        }
     }
 
 
 @app.post("/api/v1/content/create")
 async def create_content(request: ContentRequest, background_tasks: BackgroundTasks):
-    """Create new content using the AI pipeline."""
-    
     try:
-        # Generate unique request ID as UUID
         request_id = str(uuid.uuid4())
         request.id = request_id
-        
-        # Validate request
+
         if not request.topic or len(request.topic.strip()) < 3:
-            raise HTTPException(status_code=400, detail="Topic must be at least 3 characters long")
-        
+            raise HTTPException(status_code=400, detail="Topic must be at least 3 characters")
+
         if request.word_count and (request.word_count < 100 or request.word_count > settings.max_content_length):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Word count must be between 100 and {settings.max_content_length}"
-            )
-        
-        # Store initial request in database
+            raise HTTPException(status_code=400, detail=f"Word count must be between 100 and {settings.max_content_length}")
+
         await db_service.create_content_request(request)
-        
-        # Start content creation in background
         background_tasks.add_task(process_content_creation, request_id, request)
-        
+
         return {
             "message": "Content creation started",
             "request_id": request_id,
             "status": ContentStatus.PENDING,
             "estimated_completion": "2-5 minutes"
         }
-        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start content creation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to start: {str(e)}")
 
 
 @app.get("/api/v1/content/{content_id}")
 async def get_content(content_id: str):
-    """Get created content by ID."""
-    
-    # Try to get content piece first
     content_data = await db_service.get_content_piece(content_id)
-    
     if not content_data:
-        # If not found as content piece, try as request ID
         request_data = await db_service.get_content_request(content_id)
         if not request_data:
             raise HTTPException(status_code=404, detail="Content not found")
-        
-        # Get associated content pieces
         content_pieces = await db_service.get_content_pieces_by_request(content_id)
-        
         return {
             "content_id": content_id,
             "status": request_data["status"],
@@ -121,10 +117,8 @@ async def get_content(content_id: str):
             "request": request_data,
             "content_pieces": content_pieces
         }
-    
-    # Get associated request
+
     request_data = await db_service.get_content_request(content_data["request_id"]) if content_data.get("request_id") else None
-    
     return {
         "content_id": content_id,
         "status": content_data["status"],
@@ -148,23 +142,17 @@ async def get_content(content_id: str):
 
 @app.get("/api/v1/content/{content_id}/status")
 async def get_content_status(content_id: str):
-    """Get content creation status."""
-    
-    # Try to get real-time status from orchestrator first
     task_status = await orchestrator.get_task_status(content_id)
-    
     if "error" not in task_status:
         return task_status
-    
-    # Fallback to database status
+
     request_data = await db_service.get_content_request(content_id)
-    
     if not request_data:
         raise HTTPException(status_code=404, detail="Content not found")
-    
+
     created_at = datetime.fromisoformat(request_data["created_at"].replace('Z', '+00:00'))
     elapsed_time = (datetime.utcnow() - created_at.replace(tzinfo=None)).total_seconds()
-    
+
     return {
         "request_id": content_id,
         "status": request_data["status"],
@@ -175,32 +163,19 @@ async def get_content_status(content_id: str):
 
 @app.delete("/api/v1/content/{content_id}")
 async def cancel_content_creation(content_id: str):
-    """Cancel content creation task."""
-    
     request_data = await db_service.get_content_request(content_id)
-    
     if not request_data:
         raise HTTPException(status_code=404, detail="Content not found")
-    
-    # Try to cancel in orchestrator
-    cancel_result = await orchestrator.cancel_task(content_id)
-    
-    # Update database status
+
+    await orchestrator.cancel_task(content_id)
     await db_service.update_content_request_status(content_id, ContentStatus.FAILED)
-    
-    return {
-        "message": "Content creation cancelled",
-        "content_id": content_id,
-        "status": "cancelled"
-    }
+
+    return {"message": "Content creation cancelled", "content_id": content_id, "status": "cancelled"}
 
 
 @app.get("/api/v1/content")
 async def list_content(limit: int = 10, offset: int = 0, user_id: str = None):
-    """List all content with pagination."""
-    
     result = await db_service.list_content_requests(user_id=user_id, limit=limit, offset=offset)
-    
     return {
         "total": result["total"],
         "limit": limit,
@@ -221,26 +196,16 @@ async def list_content(limit: int = 10, offset: int = 0, user_id: str = None):
 
 @app.get("/api/v1/stats")
 async def get_stats():
-    """Get system statistics."""
-    
     return await db_service.get_content_stats()
 
 
 async def process_content_creation(request_id: str, request: ContentRequest):
-    """Background task to process content creation."""
-    
     try:
-        # Update status to processing
         await db_service.update_content_request_status(request_id, ContentStatus.PROCESSING)
-        
-        # Execute content creation pipeline
         result = await orchestrator.create_content(request)
-        
-        # Store result in database
+
         if result["status"] == "success":
             content_data = result["content"]
-            
-            # Create content piece record
             content_piece_data = {
                 "request_id": request_id,
                 "title": content_data.get("title"),
@@ -251,15 +216,11 @@ async def process_content_creation(request_id: str, request: ContentRequest):
                 "fact_check_score": content_data.get("quality_metrics", {}).get("fact_check_score", 0.0),
                 "status": ContentStatus.COMPLETED
             }
-            
             await db_service.create_content_piece(content_piece_data)
             await db_service.update_content_request_status(request_id, ContentStatus.COMPLETED)
-            
         else:
             await db_service.update_content_request_status(request_id, ContentStatus.FAILED)
-            
     except Exception as e:
-        # Handle any unexpected errors
         await db_service.update_content_request_status(request_id, ContentStatus.FAILED)
         print(f"Content creation failed for {request_id}: {str(e)}")
 

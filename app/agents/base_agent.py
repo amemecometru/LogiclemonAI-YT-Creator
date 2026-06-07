@@ -15,7 +15,12 @@ class BaseAgent(ABC):
     def __init__(self, agent_type: AgentType):
         self.agent_type = agent_type
         self.config = get_agent_config()
-        self.client = openai.AsyncOpenAI(api_key=self.config["openai_api_key"])
+        client_kwargs = {"api_key": self.config["openai_api_key"]}
+        if self.config.get("base_url"):
+            client_kwargs["base_url"] = self.config["base_url"]
+        if self.config.get("default_headers"):
+            client_kwargs["default_headers"] = self.config["default_headers"]
+        self.client = openai.AsyncOpenAI(**client_kwargs)
         self.status = ContentStatus.PENDING
         self.execution_start_time: Optional[float] = None
     
