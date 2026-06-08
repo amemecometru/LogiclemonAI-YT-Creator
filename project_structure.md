@@ -65,7 +65,7 @@ content-pipeline/
 - Enums for content types and statuses
 - Request/response schemas
 
-### 6. **Database Schema** (Supabase)
+### 6. **Database Schema** (Cloudflare D1)
 - `organizations`: User organizations
 - `users`: System users
 - `content_requests`: Content creation requests

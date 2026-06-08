@@ -5,7 +5,7 @@ A production-grade AI-powered YouTube content creation pipeline. Research topics
 ## Features
 
 - **🎬 Script Writing** - YouTube-optimized scripts with hooks, retention patterns, timestamps
-- **🔍 Smart Research** - AI-powered research via Tavily + Firecrawl
+- **🔍 Smart Research** - AI-powered research via Cloudflare Workers
 - **📈 YouTube SEO** - Title optimization, tag generation, description with chapters
 - **🖼️ Thumbnail Design** - AI-generated thumbnail concepts with composition guides
 - **📋 Content Planning** - AI-generated content calendars for your niche
@@ -20,7 +20,7 @@ A production-grade AI-powered YouTube content creation pipeline. Research topics
 
 - Python 3.11+
 - OpenAI API key
-- (Optional) Tavily API key for research
+- (Optional) Cloudflare API token for Workers + D1
 - (Optional) Google Cloud OAuth 2.0 credentials for YouTube upload
 
 ### Installation
@@ -92,7 +92,7 @@ curl -X POST "http://localhost:8000/api/v1/yt/create" \
 └────────────────────┬────────────────────────────────┘
                      ▼
 ┌─────────────────────────────────────────────────────┐
-│              1. Research Agent (Tavily + AI)         │
+│              1. Research Agent (Cloudflare + AI)     │
 │     Gathers sources, key findings, statistics        │
 └────────────────────┬────────────────────────────────┘
                      ▼
@@ -124,7 +124,7 @@ LogiclemonAI/
 ├── app/
 │   ├── agents/
 │   │   ├── base_agent.py          # Abstract base class
-│   │   ├── research_agent.py      # Tavily + Firecrawl research
+│   │   ├── research_agent.py      # Cloudflare Worker research
 │   │   ├── writer_agent.py        # Blog/article writer
 │   │   ├── script_writer_agent.py # YouTube script writer
 │   │   ├── youtube_seo_agent.py   # YouTube SEO optimizer
@@ -136,7 +136,7 @@ LogiclemonAI/
 │   │   ├── content.py             # Original content models
 │   │   └── youtube.py             # YouTube-specific models
 │   ├── services/
-│   │   ├── database_service.py    # Supabase integration
+│   │   ├── database_service.py    # Cloudflare D1 integration
 │   │   └── youtube_service.py     # YouTube API v3 integration
 │   ├── dashboard.py               # API router for YT endpoints
 │   ├── cli.py                     # Command-line interface

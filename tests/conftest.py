@@ -8,7 +8,7 @@ import os
 # Set test environment variables
 os.environ["OPENAI_API_KEY"] = "test-key"
 os.environ["DATABASE_URL"] = "sqlite:///test.db"
-os.environ["TAVILY_API_KEY"] = "test-tavily-key"
+os.environ["CLOUDFLARE_API_TOKEN"] = "test-token"
 
 
 @pytest.fixture(scope="session")
