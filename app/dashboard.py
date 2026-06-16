@@ -2,11 +2,13 @@ import json
 import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+import httpx
 from fastapi import APIRouter, Query, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from app.core.yt_pipeline import YTPipeline
 from app.models.youtube import AnalyticsSnapshot
 from app.models.content import ContentStatus
+from app.config import settings
 
 
 router = APIRouter(prefix="/api/v1/yt", tags=["youtube"])
@@ -19,6 +21,11 @@ class CreateVideoRequest(BaseModel):
     video_length: str = "medium"
     tone: str = "professional"
     niche: str = "general"
+
+
+class XPostRequest(BaseModel):
+    thread: Optional[List[str]] = None
+    text: Optional[str] = None
 
 
 @router.post("/create")
@@ -125,3 +132,51 @@ async def export_script(task_id: str, format: str = Query("plain")):
             "script": script.get("full_script", ""),
         }
     return {"task_id": task_id, "format": format, "result": result}
+
+
+@router.get("/x/config")
+async def x_config():
+    """Tell the frontend whether X auto-post is wired and whether an account is connected.
+    Returns no secrets — only the public login URL + connection status."""
+    base = (settings.x_worker_url or "").rstrip("/")
+    if not base:
+        return {"configured": False, "connected": False, "login_url": None, "username": None}
+    out = {"configured": True, "login_url": f"{base}/x/login", "connected": False, "username": None}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{base}/x/status")
+            if r.status_code == 200:
+                d = r.json()
+                out["connected"] = bool(d.get("connected"))
+                out["username"] = d.get("username")
+    except Exception:
+        pass
+    return out
+
+
+@router.post("/x/post")
+async def x_post(req: XPostRequest):
+    """Proxy a thread/text to the x-worker. The worker token stays server-side (never in the browser)."""
+    base = (settings.x_worker_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="X worker not configured (set X_WORKER_URL).")
+    payload = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not payload:
+        raise HTTPException(status_code=400, detail="Provide 'thread' (list) or 'text' (string).")
+    headers = {"Content-Type": "application/json"}
+    if settings.x_worker_token:
+        headers["Authorization"] = f"Bearer {settings.x_worker_token}"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{base}/x/post", headers=headers, json=payload)
+            try:
+                data = r.json()
+            except Exception:
+                data = {"error": r.text}
+            if r.status_code >= 400:
+                raise HTTPException(status_code=r.status_code, detail=data.get("error") or data)
+            return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"X worker request failed: {e}")
