@@ -5,3 +5,10 @@ account_id = "8a460817bc554362e040644c8e003fb9"
 
 [vars]
 # API_TOKEN set via wrangler secret
+
+# Optional response cache (6h). The worker runs fine without it; bind to enable caching:
+#   wrangler kv namespace create RESEARCH_CACHE
+# then uncomment and paste the id:
+# [[kv_namespaces]]
+# binding = "RESEARCH_CACHE"
+# id = "REPLACE_WITH_KV_ID"
