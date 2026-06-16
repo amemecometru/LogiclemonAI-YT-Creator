@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     cloudflare_research_url: str = os.getenv("CLOUDFLARE_RESEARCH_URL", "")
     cloudflare_api_token: str = os.getenv("CLOUDFLARE_API_TOKEN", "")
 
+    # X (Twitter) auto-thread worker — see workers/x-worker
+    x_worker_url: str = os.getenv("X_WORKER_URL", "")        # e.g. https://logiclemonai-x.<sub>.workers.dev
+    x_worker_token: str = os.getenv("X_WORKER_TOKEN", "")    # = the x-worker's API_TOKEN (gates POST /x/post)
+
     rate_limit_requests: int = 10
     rate_limit_window: int = 3600
     max_content_length: int = 5000

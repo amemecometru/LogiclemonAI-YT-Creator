@@ -211,6 +211,10 @@
   .tab.active{color:var(--teal);border-bottom-color:var(--teal);}
   .tab-content{display:none;}
   .tab-content.active{display:block;}
+  .x-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px;font-family:var(--font-mono);font-size:.72rem;}
+  .x-status .x-on{color:var(--teal);}
+  .x-status .x-dim{color:var(--ink-on-dark-dim);}
+  .x-status .btn{padding:8px 14px;font-size:.7rem;}
   .card{padding:34px;margin-bottom:22px;}
   .card h2{font-weight:700;font-size:1.08rem;color:var(--ink-on-dark);margin-bottom:18px;}
 
@@ -316,6 +320,8 @@
       <!-- CONTENT STUDIO (the tool — promoted to lead) -->
       <section class="section" id="studio">
         <div class="section-bar"><span class="label">Content Studio</span><span class="line"></span></div>
+
+        <div id="x-status" class="x-status"></div>
 
         <div class="tabs">
           <div class="tab active" onclick="switchTab('create')">Create Video</div>
@@ -607,10 +613,14 @@
         if (thumb.concept_description) {
           html += `<p style="margin-top:12px;font-family:var(--font-mono);font-size:.7rem;color:var(--ink-on-dark-dim);line-height:1.7;"><strong style="color:var(--teal);">Thumbnail:</strong> ${thumb.concept_description.substring(0, 220)}</p>`;
         }
+        const xSvg = `<svg viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px;"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`;
         html += `<div class="share-row">`;
         html += `<button class="btn btn-metal" onclick="showFullScript(this, '${scriptEnc}')">Show script</button>`;
         if (meta.description) html += `<button class="btn btn-metal" onclick="showDescription(this, '${metaEnc}')">Show description</button>`;
-        html += `<button class="btn btn-metal" onclick="shareToX('${scriptEnc}', '${metaEnc}')"><svg viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px;"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg> Share to X</button>`;
+        // Adaptive X action: auto-post a thread when an account is connected; else prompt connect; else web-intent fallback.
+        if (xCfg.connected) html += `<button class="btn btn-metal" onclick="postThreadToX('${scriptEnc}', '${metaEnc}')">${xSvg} Post thread to X</button>`;
+        else if (xCfg.configured) html += `<button class="btn btn-metal" onclick="connectX()">${xSvg} Connect X to auto-post</button>`;
+        else html += `<button class="btn btn-metal" onclick="shareToX('${scriptEnc}', '${metaEnc}')">${xSvg} Share to X</button>`;
         html += `<button class="btn btn-metal" onclick="copyScript('${scriptEnc}')">Copy script</button>`;
         html += `</div>`;
         html += `<div class="result-area" style="display:none;"></div>`;
@@ -839,6 +849,47 @@
       }
     }
 
+    /* ---- X auto-post (frontend → FastAPI proxy → x-worker) ---- */
+    let xCfg = { configured: false, connected: false, username: null, login_url: null };
+    async function loadXConfig() {
+      try { xCfg = await (await fetch(`${API}/x/config`)).json(); }
+      catch (e) { xCfg = { configured: false, connected: false }; }
+      renderXStatus();
+    }
+    function renderXStatus() {
+      const el = document.getElementById('x-status'); if (!el) return;
+      if (!xCfg.configured) { el.innerHTML = '<span class="x-dim">𝕏 auto-post not configured</span>'; return; }
+      if (xCfg.connected) { el.innerHTML = `<span class="x-on">𝕏 connected as @${xCfg.username || 'you'}</span>`; }
+      else { el.innerHTML = `<span class="x-dim">𝕏 not connected</span> <button class="btn btn-metal" onclick="connectX()">Connect X</button>`; }
+    }
+    function connectX() { if (xCfg.login_url) window.open(xCfg.login_url, '_blank', 'noopener'); else toast('X worker not configured'); }
+    function composeThread(script, meta) {
+      const title = (script.title || '').toString().trim();
+      const hook = (script.hook || '').toString().trim();
+      const tags = (meta.tags || []).slice(0, 3).map(t => '#' + String(t).replace(/[^a-z0-9]/gi, '')).filter(x => x.length > 1).join(' ');
+      const tweets = [];
+      if (title) tweets.push(('🎬 ' + title).slice(0, 270));
+      if (hook) tweets.push(hook.slice(0, 270));
+      let cta = 'Full video dropping soon — follow for the drop. 👇';
+      if (tags) cta += '\n\n' + tags;
+      tweets.push(cta.slice(0, 270));
+      return tweets.filter(Boolean);
+    }
+    async function postThreadToX(scriptJson, metaJson) {
+      const script = JSON.parse(decodeURIComponent(scriptJson));
+      let meta = {}; try { if (metaJson) meta = JSON.parse(decodeURIComponent(metaJson)); } catch (e) {}
+      const thread = composeThread(script, meta);
+      if (!thread.length) { toast('Nothing to post'); return; }
+      toast('Posting thread to X…');
+      try {
+        const r = await fetch(`${API}/x/post`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread }) });
+        const d = await r.json();
+        if (r.ok && d.status === 'success') { toast('Posted to X ✓'); if (d.url) window.open(d.url, '_blank', 'noopener'); }
+        else { toast('X post failed: ' + (d.detail || d.error || ('HTTP ' + r.status))); }
+      } catch (e) { toast('X post failed: ' + e.message); }
+    }
+
+    loadXConfig();
     setInterval(refreshTasks, 5000);
   </script>
 </body>
