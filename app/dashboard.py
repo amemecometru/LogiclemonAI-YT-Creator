@@ -59,16 +59,19 @@ yt_service = YouTubeService()
 
 @router.get("/channel")
 async def get_channel():
+    """Connected channel's stats + recent uploads (requires YouTube OAuth)."""
     stats = await yt_service.get_channel_stats()
+    if isinstance(stats, dict) and stats.get("error"):
+        raise HTTPException(status_code=503, detail=f"YouTube not connected: {stats['error']}")
     videos = await yt_service.list_channel_videos(max_results=10)
     return {
         "stats": stats,
         "recent_videos": [
             {
-                "video_id": item["snippet"]["resourceId"]["videoId"],
-                "title": item["snippet"]["title"],
-                "published_at": item["snippet"]["publishedAt"],
-                "thumbnails": item["snippet"]["thumbnails"],
+                "video_id": item.get("snippet", {}).get("resourceId", {}).get("videoId"),
+                "title": item.get("snippet", {}).get("title"),
+                "published_at": item.get("snippet", {}).get("publishedAt"),
+                "thumbnails": item.get("snippet", {}).get("thumbnails"),
             }
             for item in videos[:10]
         ]

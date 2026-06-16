@@ -1,5 +1,6 @@
 import os
 from typing import Dict, Any, Optional
+from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings
 
 
@@ -27,7 +28,8 @@ class Settings(BaseSettings):
 
     yt_oauth_client_id: str = os.getenv("YT_OAUTH_CLIENT_ID", "")
     yt_oauth_client_secret: str = os.getenv("YT_OAUTH_CLIENT_SECRET", "")
-    youtube_api_key: str = os.getenv("YOUTUBE_API_KEY", "") or os.getenv("LOGICLEMONAI_YT_API_KEY", "")
+    # Reads YOUTUBE_API_KEY or legacy LOGICLEMONAI_YT_API_KEY from .env/environment (alias-resolved by pydantic, not at import time).
+    youtube_api_key: str = Field(default="", validation_alias=AliasChoices("YOUTUBE_API_KEY", "LOGICLEMONAI_YT_API_KEY"))
 
     rate_limit_requests: int = 10
     rate_limit_window: int = 3600

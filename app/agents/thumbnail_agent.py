@@ -3,6 +3,7 @@ import base64
 import httpx
 import hashlib
 import os
+import urllib.parse
 from typing import Dict, Any, List, Optional
 from app.agents.base_agent import BaseAgent
 from app.models.content import AgentType, ContentStatus
@@ -107,8 +108,8 @@ class ThumbnailAgent(BaseAgent):
 
     async def _render_via_pollinations(self, prompt: str) -> Optional[Dict[str, Any]]:
         try:
-            safe_prompt = httpx.URL(prompt).path if False else prompt.replace(" ", "%20")[:400]
-            url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nofeed=true"
+            safe_prompt = urllib.parse.quote((prompt or "")[:400], safe="")
+            url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true&nofeed=true"
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.head(url)
                 if resp.status_code < 500:
