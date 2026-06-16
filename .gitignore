@@ -140,3 +140,10 @@ sample-code-*
 # OS
 .DS_Store
 Thumbs.db
+
+# --- secrets & local (added by handoff review) ---
+.env.*
+!.env.example
+*.pickle
+*.pyc
+.venv/
