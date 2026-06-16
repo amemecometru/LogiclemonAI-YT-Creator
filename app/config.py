@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Reads YOUTUBE_API_KEY or legacy LOGICLEMONAI_YT_API_KEY from .env/environment (alias-resolved by pydantic, not at import time).
     youtube_api_key: str = Field(default="", validation_alias=AliasChoices("YOUTUBE_API_KEY", "LOGICLEMONAI_YT_API_KEY"))
 
+    # API-key gating (T7) — OFF by default so the studio works without keys; flip on for production.
+    require_api_key: bool = os.getenv("REQUIRE_API_KEY", "false").lower() in ("1", "true", "yes")
+    monthly_quota: int = int(os.getenv("MONTHLY_QUOTA", "1000"))
+
     rate_limit_requests: int = 10
     rate_limit_window: int = 3600
     max_content_length: int = 5000
