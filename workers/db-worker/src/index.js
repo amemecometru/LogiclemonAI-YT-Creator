@@ -82,6 +82,59 @@ export default {
         result = await listRecords(env.DB, 'yt_videos', url.searchParams);
       }
 
+      // users (commerce)
+      else if (request.method === 'POST' && path === '/users') {
+        result = await createRecord(env.DB, 'users', await request.json());
+      }
+      else if (request.method === 'GET' && (m = path.match(/^\/users\/by-email\/(.+)$/))) {
+        result = await getRecordByField(env.DB, 'users', 'email', decodeURIComponent(m[1]));
+      }
+      else if (request.method === 'GET' && (m = path.match(/^\/users\/(.+)$/))) {
+        result = await getRecord(env.DB, 'users', m[1]);
+      }
+      else if (request.method === 'PATCH' && (m = path.match(/^\/users\/(.+)$/))) {
+        result = await updateRecord(env.DB, 'users', m[1], await request.json());
+      }
+
+      // api_keys
+      else if (request.method === 'POST' && path === '/api_keys') {
+        result = await createRecord(env.DB, 'api_keys', await request.json());
+      }
+      else if (request.method === 'GET' && (m = path.match(/^\/api_keys\/by-hash\/(.+)$/))) {
+        result = await getRecordByField(env.DB, 'api_keys', 'key_hash', m[1]);
+      }
+      else if (request.method === 'PATCH' && (m = path.match(/^\/api_keys\/(.+)$/))) {
+        result = await updateRecord(env.DB, 'api_keys', m[1], await request.json());
+      }
+      else if (request.method === 'GET' && (m = path.match(/^\/api_keys\/(.+)$/))) {
+        result = await getRecord(env.DB, 'api_keys', m[1]);
+      }
+      else if (request.method === 'GET' && path === '/api_keys') {
+        result = await listRecords(env.DB, 'api_keys', url.searchParams);
+      }
+
+      // subscriptions
+      else if (request.method === 'POST' && path === '/subscriptions') {
+        result = await createRecord(env.DB, 'subscriptions', await request.json());
+      }
+      else if (request.method === 'PATCH' && (m = path.match(/^\/subscriptions\/(.+)$/))) {
+        result = await updateRecord(env.DB, 'subscriptions', m[1], await request.json());
+      }
+      else if (request.method === 'GET' && (m = path.match(/^\/subscriptions\/(.+)$/))) {
+        result = await getRecord(env.DB, 'subscriptions', m[1]);
+      }
+      else if (request.method === 'GET' && path === '/subscriptions') {
+        result = await listRecords(env.DB, 'subscriptions', url.searchParams);
+      }
+
+      // usage
+      else if (request.method === 'POST' && path === '/usage/increment') {
+        result = await incrementUsage(env.DB, await request.json());
+      }
+      else if (request.method === 'GET' && path === '/usage') {
+        result = await listRecords(env.DB, 'usage', url.searchParams);
+      }
+
       // stats
       else if (request.method === 'GET' && path === '/stats') {
         result = await getStats(env.DB);
@@ -125,6 +178,28 @@ async function getRecord(db, table, id) {
   return parseJsonFields(result);
 }
 
+async function getRecordByField(db, table, field, value) {
+  const result = await db.prepare(`SELECT * FROM ${table} WHERE ${field} = ?`).bind(value).first();
+  if (!result) return null;
+  return parseJsonFields(result);
+}
+
+async function incrementUsage(db, data) {
+  const userId = data.user_id, period = data.period;
+  const by = parseInt(data.by || 1, 10);
+  if (!userId || !period) return { error: 'user_id and period required' };
+  const now = new Date().toISOString();
+  const existing = await db.prepare(`SELECT * FROM usage WHERE user_id = ? AND period = ?`).bind(userId, period).first();
+  if (existing) {
+    const units = (existing.units || 0) + by;
+    await db.prepare(`UPDATE usage SET units = ?, updated_at = ? WHERE id = ?`).bind(units, now, existing.id).run();
+    return { id: existing.id, units };
+  }
+  const id = crypto.randomUUID();
+  await db.prepare(`INSERT INTO usage (id, user_id, period, units, updated_at) VALUES (?, ?, ?, ?, ?)`).bind(id, userId, period, by, now).run();
+  return { id, units: by };
+}
+
 async function updateRecord(db, table, id, data) {
   data.updated_at = new Date().toISOString();
   const keys = Object.keys(data);
@@ -163,6 +238,10 @@ async function listRecords(db, table, params) {
   if (table === 'agent_tasks' && requestId) {
     where = 'WHERE content_request_id = ?';
     bindValues.push(requestId);
+  }
+  if ((table === 'api_keys' || table === 'subscriptions' || table === 'usage') && userId) {
+    where = 'WHERE user_id = ?';
+    bindValues.push(userId);
   }
 
   const countResult = await db.prepare(`SELECT COUNT(*) as total FROM ${table} ${where}`).bind(...bindValues).first();

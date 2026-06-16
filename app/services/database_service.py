@@ -214,6 +214,69 @@ class DatabaseService:
             return result
         return {"data": [], "total": 0, "limit": limit, "offset": offset}
 
+    # ---- commerce: users / api_keys / subscriptions / usage ----
+    async def create_user(self, email: str, plan: str = "free") -> Optional[Dict[str, Any]]:
+        now = datetime.utcnow().isoformat()
+        payload = {"id": str(uuid.uuid4()), "email": email, "plan": plan, "created_at": now, "updated_at": now}
+        result = await self._post("/users", payload)
+        if result:
+            return {**payload, "id": result.get("id", payload["id"])}
+        return None
+
+    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        from urllib.parse import quote
+        return await self._get(f"/users/by-email/{quote(email, safe='')}")
+
+    async def get_or_create_user(self, email: str) -> Optional[Dict[str, Any]]:
+        return (await self.get_user_by_email(email)) or (await self.create_user(email))
+
+    async def create_api_key(self, user_id: str, name: str, key_hash: str, prefix: str) -> Optional[str]:
+        now = datetime.utcnow().isoformat()
+        payload = {"id": str(uuid.uuid4()), "user_id": user_id, "name": name, "key_hash": key_hash,
+                   "prefix": prefix, "revoked": 0, "created_at": now, "updated_at": now}
+        result = await self._post("/api_keys", payload)
+        return result.get("id", payload["id"]) if result else None
+
+    async def get_api_key_by_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        return await self._get(f"/api_keys/by-hash/{key_hash}")
+
+    async def list_api_keys(self, user_id: str) -> List[Dict[str, Any]]:
+        result = await self._get(f"/api_keys?user_id={user_id}&limit=100")
+        return result.get("data", []) if result else []
+
+    async def revoke_api_key(self, key_id: str) -> bool:
+        result = await self._patch(f"/api_keys/{key_id}", {"revoked": 1})
+        return bool(result and result.get("success", True))
+
+    async def touch_api_key(self, key_id: str) -> None:
+        await self._patch(f"/api_keys/{key_id}", {"last_used_at": datetime.utcnow().isoformat()})
+
+    async def get_subscription(self, user_id: str) -> Optional[Dict[str, Any]]:
+        result = await self._get(f"/subscriptions?user_id={user_id}&limit=1")
+        data = result.get("data", []) if result else []
+        return data[0] if data else None
+
+    async def upsert_subscription(self, data: Dict[str, Any]) -> Optional[str]:
+        now = datetime.utcnow().isoformat()
+        existing = await self.get_subscription(data.get("user_id"))
+        if existing:
+            await self._patch(f"/subscriptions/{existing['id']}", {**data, "updated_at": now})
+            return existing["id"]
+        payload = {"id": str(uuid.uuid4()), "created_at": now, "updated_at": now, **data}
+        result = await self._post("/subscriptions", payload)
+        return result.get("id", payload["id"]) if result else None
+
+    async def get_usage(self, user_id: str, period: str) -> int:
+        result = await self._get(f"/usage?user_id={user_id}&limit=100")
+        for row in (result.get("data", []) if result else []):
+            if row.get("period") == period:
+                return int(row.get("units", 0))
+        return 0
+
+    async def increment_usage(self, user_id: str, period: str, by: int = 1) -> int:
+        result = await self._post("/usage/increment", {"user_id": user_id, "period": period, "by": by})
+        return int(result.get("units", 0)) if result else 0
+
     async def health_check(self) -> bool:
         result = await self._get("/health")
         return result is not None and result.get("status") == "healthy"
