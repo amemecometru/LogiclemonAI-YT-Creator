@@ -249,6 +249,16 @@
   .confirm-dialog .plan-period{font-family:var(--font-mono);font-size:.7rem;color:var(--ink-on-dark-dim);margin-bottom:26px;}
   .confirm-dialog .message{font-family:var(--font-mono);font-size:.74rem;color:var(--ink-on-dark-dim);line-height:1.8;margin-bottom:26px;}
   .confirm-dialog .btn-group{display:flex;gap:12px;justify-content:center;}
+  /* X thread composer (review + edit before posting) */
+  .x-composer{max-width:560px;text-align:left;}
+  .x-composer .plan-name{margin-bottom:16px;}
+  .x-tweet-row{margin-bottom:12px;}
+  .x-tweet-row .x-tweet{width:100%;}
+  .x-tweet-meta{display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-family:var(--font-mono);font-size:.62rem;}
+  .x-tweet-meta .x-count{color:var(--ink-on-dark-dim);}
+  .x-tweet-meta .x-del{background:none;border:none;color:var(--ink-on-dark-dim);cursor:pointer;font-family:var(--font-mono);font-size:.62rem;text-decoration:underline;}
+  .x-tweet-meta .x-del:hover{color:var(--ember);}
+  .x-composer-actions{display:flex;align-items:center;gap:10px;margin-top:16px;}
   @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
 
   /* TOAST */
@@ -875,18 +885,53 @@
       tweets.push(cta.slice(0, 270));
       return tweets.filter(Boolean);
     }
-    async function postThreadToX(scriptJson, metaJson) {
+    // "Post thread to X" → open an editable composer so the thread is reviewed/edited before it goes live.
+    function postThreadToX(scriptJson, metaJson) {
+      if (document.querySelector('.confirm-overlay.x-composer-overlay')) return; // one composer at a time
       const script = JSON.parse(decodeURIComponent(scriptJson));
       let meta = {}; try { if (metaJson) meta = JSON.parse(decodeURIComponent(metaJson)); } catch (e) {}
-      const thread = composeThread(script, meta);
-      if (!thread.length) { toast('Nothing to post'); return; }
-      toast('Posting thread to X…');
+      const tweets = composeThread(script, meta);
+      const overlay = document.createElement('div');
+      overlay.className = 'confirm-overlay x-composer-overlay';
+      overlay.innerHTML = `
+        <div class="confirm-dialog glz-surface-glass x-composer">
+          <div class="plan-name">Post thread to 𝕏${xCfg.username ? ' · @' + xCfg.username : ''}</div>
+          <div class="x-tweets"></div>
+          <div class="x-composer-actions">
+            <button class="btn btn-metal" onclick="addTweetRow(this.closest('.confirm-overlay'))">+ Add tweet</button>
+            <span style="flex:1;"></span>
+            <button class="btn btn-secondary" onclick="this.closest('.confirm-overlay').remove()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitThread(this)">Post thread →</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      tweets.forEach((t) => addTweetRow(overlay, t));
+    }
+    function addTweetRow(overlay, text) {
+      const wrap = overlay && overlay.querySelector('.x-tweets'); if (!wrap) return;
+      const row = document.createElement('div'); row.className = 'x-tweet-row';
+      row.innerHTML = `<textarea class="glz-field x-tweet" maxlength="280" rows="3" oninput="xCount(this)"></textarea>
+        <div class="x-tweet-meta"><span class="x-count">0/280</span><button class="x-del" onclick="this.closest('.x-tweet-row').remove()">remove</button></div>`;
+      wrap.appendChild(row);
+      const ta = row.querySelector('textarea'); ta.value = text || ''; xCount(ta);
+    }
+    function xCount(ta) {
+      const c = ta.closest('.x-tweet-row').querySelector('.x-count');
+      const n = ta.value.length; c.textContent = n + '/280';
+      c.style.color = n > 280 ? 'var(--ember)' : 'var(--ink-on-dark-dim)';
+    }
+    async function submitThread(btn) {
+      const overlay = btn.closest('.confirm-overlay');
+      const tweets = Array.from(overlay.querySelectorAll('.x-tweets .x-tweet')).map((t) => t.value.trim()).filter(Boolean);
+      if (!tweets.length) { toast('Add at least one tweet'); return; }
+      if (tweets.some((t) => t.length > 280)) { toast('Each tweet must be ≤ 280 characters'); return; }
+      btn.disabled = true; btn.textContent = 'Posting…';
       try {
-        const r = await fetch(`${API}/x/post`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread }) });
+        const r = await fetch(`${API}/x/post`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread: tweets }) });
         const d = await r.json();
-        if (r.ok && d.status === 'success') { toast('Posted to X ✓'); if (d.url) window.open(d.url, '_blank', 'noopener'); }
-        else { toast('X post failed: ' + (d.detail || d.error || ('HTTP ' + r.status))); }
-      } catch (e) { toast('X post failed: ' + e.message); }
+        if (r.ok && d.status === 'success') { toast('Posted to X ✓'); if (d.url) window.open(d.url, '_blank', 'noopener'); overlay.remove(); }
+        else { toast('X post failed: ' + (d.detail || d.error || ('HTTP ' + r.status))); btn.disabled = false; btn.textContent = 'Post thread →'; }
+      } catch (e) { toast('X post failed: ' + e.message); btn.disabled = false; btn.textContent = 'Post thread →'; }
     }
 
     loadXConfig();
