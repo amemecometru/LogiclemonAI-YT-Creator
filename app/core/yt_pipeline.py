@@ -2,6 +2,7 @@ import asyncio
 import time
 import json
 import os
+import uuid
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from app.agents.research_agent import ResearchAgent
@@ -11,6 +12,7 @@ from app.agents.thumbnail_agent import ThumbnailAgent
 from app.models.content import ContentRequest, ContentStatus
 from app.models.youtube import VideoScript, YouTubeMetadata, ThumbnailDesign, ContentPlan
 from app.config import settings
+from app.services.database_service import DatabaseService
 
 
 class YTPipeline:
@@ -21,17 +23,34 @@ class YTPipeline:
         self.thumbnail_agent = ThumbnailAgent()
         self.active_tasks: Dict[str, Dict[str, Any]] = {}
         self.content_plan: Optional[ContentPlan] = None
+        self.db = DatabaseService()
 
-    async def create_video_content(self, topic: str, target_audience: str = "general audience",
-                                    video_length: str = "medium", tone: str = "professional",
-                                    niche: str = "general", channel_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        task_id = f"yt_{int(time.time())}"
+    def register_task(self) -> str:
+        """Create a task entry up front (status=processing) and return its id, so a
+        non-blocking endpoint can return immediately while the pipeline runs in the background."""
+        task_id = f"yt_{uuid.uuid4().hex[:12]}"
         self.active_tasks[task_id] = {
             "status": ContentStatus.PROCESSING,
             "start_time": time.time(),
             "current_agent": None,
             "progress": 0
         }
+        self._evict_old_tasks()
+        return task_id
+
+    async def create_video_content(self, topic: str, target_audience: str = "general audience",
+                                    video_length: str = "medium", tone: str = "professional",
+                                    niche: str = "general", channel_config: Optional[Dict[str, Any]] = None,
+                                    task_id: Optional[str] = None) -> Dict[str, Any]:
+        if task_id is None:
+            task_id = self.register_task()
+        elif task_id not in self.active_tasks:
+            self.active_tasks[task_id] = {
+                "status": ContentStatus.PROCESSING,
+                "start_time": time.time(),
+                "current_agent": None,
+                "progress": 0
+            }
 
         try:
             self.active_tasks[task_id]["current_agent"] = "research"
@@ -101,6 +120,8 @@ class YTPipeline:
                 "task_id": task_id,
                 "status": "success",
                 "topic": topic,
+                "niche": niche,
+                "target_audience": target_audience,
                 "execution_time": round(execution_time, 2),
                 "research_confidence": round(confidence, 2),
                 "script": script,
@@ -116,6 +137,9 @@ class YTPipeline:
 
             self.active_tasks[task_id]["status"] = ContentStatus.COMPLETED
             self.active_tasks[task_id]["progress"] = 100
+            self.active_tasks[task_id]["result"] = result   # retain payload for /tasks/{id} and /export/{id}
+            await self._persist_result(task_id, result)     # persist to D1 so it survives a restart
+            self._evict_old_tasks()
 
             return result
 
@@ -209,15 +233,55 @@ Return ONLY valid JSON."""
 
     async def get_task_status(self, task_id: str) -> Dict[str, Any]:
         if task_id not in self.active_tasks:
+            # Fall back to the persisted store so status/result survive a restart.
+            persisted = await self.db.get_yt_video(task_id)
+            if persisted:
+                return {
+                    "task_id": task_id,
+                    "status": persisted.get("status", "completed"),
+                    "progress": 100,
+                    "current_agent": None,
+                    "elapsed_time": persisted.get("execution_time", 0),
+                    "result": persisted.get("result", {})
+                }
             return {"error": "Task not found"}
         task = self.active_tasks[task_id]
-        return {
+        status = {
             "task_id": task_id,
             "status": task["status"],
             "progress": task["progress"],
             "current_agent": task.get("current_agent"),
             "elapsed_time": round(time.time() - task["start_time"], 2)
         }
+        if task.get("result") is not None:
+            status["result"] = task["result"]
+        return status
+
+    def _evict_old_tasks(self, max_tasks: int = 200):
+        """Bound in-memory task growth — drop the oldest once over the cap.
+        Completed results are persisted to D1, so eviction only drops the in-memory copy."""
+        if len(self.active_tasks) <= max_tasks:
+            return
+        oldest = sorted(self.active_tasks, key=lambda k: self.active_tasks[k].get("start_time", 0))
+        for tid in oldest[: len(self.active_tasks) - max_tasks]:
+            self.active_tasks.pop(tid, None)
+
+    async def _persist_result(self, task_id: str, result: Dict[str, Any]):
+        """Best-effort save of a completed result to D1 (no-op if Cloudflare DB is unconfigured)."""
+        try:
+            script = result.get("script", {}) or {}
+            await self.db.save_yt_video({
+                "id": task_id,
+                "topic": result.get("topic"),
+                "title": script.get("title") or result.get("topic"),
+                "status": "completed",
+                "niche": result.get("niche"),
+                "target_audience": result.get("target_audience"),
+                "result": result,
+                "execution_time": result.get("execution_time", 0),
+            })
+        except Exception as e:
+            print(f"[YT] persist failed for {task_id}: {e}")
 
     async def cancel_task(self, task_id: str) -> Dict[str, Any]:
         if task_id not in self.active_tasks:
@@ -226,11 +290,13 @@ Return ONLY valid JSON."""
         return {"task_id": task_id, "status": "cancelled"}
 
     def _error_response(self, task_id: str, error_type: str, message: str) -> Dict[str, Any]:
-        if task_id in self.active_tasks:
-            self.active_tasks[task_id]["status"] = ContentStatus.FAILED
-        return {
+        resp = {
             "status": "error",
             "task_id": task_id,
             "error_type": error_type,
             "message": message
         }
+        if task_id in self.active_tasks:
+            self.active_tasks[task_id]["status"] = ContentStatus.FAILED
+            self.active_tasks[task_id]["result"] = resp   # so pollers can surface the failure
+        return resp

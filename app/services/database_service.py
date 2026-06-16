@@ -186,6 +186,34 @@ class DatabaseService:
             return result
         return {"total_requests": 0, "completed": 0, "failed": 0, "pending": 0, "success_rate": 0}
 
+    async def save_yt_video(self, data: Dict[str, Any]) -> Optional[str]:
+        payload = {
+            "id": data.get("id") or str(uuid.uuid4()),
+            "topic": data.get("topic"),
+            "title": data.get("title"),
+            "status": data.get("status", "completed"),
+            "niche": data.get("niche"),
+            "target_audience": data.get("target_audience"),
+            "result": data.get("result", {}),
+            "execution_time": data.get("execution_time", 0),
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        result = await self._post("/yt_videos", payload)
+        if result:
+            return result.get("id", payload["id"])
+        print(f"[DB] Mock save_yt_video: {payload['id']}")
+        return None
+
+    async def get_yt_video(self, video_id: str) -> Optional[Dict[str, Any]]:
+        return await self._get(f"/yt_videos/{video_id}")
+
+    async def list_yt_videos(self, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+        result = await self._get(f"/yt_videos?limit={limit}&offset={offset}")
+        if result:
+            return result
+        return {"data": [], "total": 0, "limit": limit, "offset": offset}
+
     async def health_check(self) -> bool:
         result = await self._get("/health")
         return result is not None and result.get("status") == "healthy"

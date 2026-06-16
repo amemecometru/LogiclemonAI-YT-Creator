@@ -322,6 +322,7 @@
           <div class="tab" onclick="switchTab('batch')">Batch</div>
           <div class="tab" onclick="switchTab('plan')">Content Plan</div>
           <div class="tab" onclick="switchTab('tasks')">Active Tasks</div>
+          <div class="tab" onclick="switchTab('library')">Library</div>
         </div>
 
         <div id="tab-create" class="tab-content active">
@@ -416,6 +417,16 @@
             <h2>Active tasks</h2>
             <button class="btn btn-metal" onclick="refreshTasks()" style="margin-bottom:16px;">Refresh</button>
             <div id="tasks-list" style="font-family:var(--font-mono);font-size:.75rem;color:var(--ink-on-dark-dim);">No active tasks.</div>
+          </div>
+        </div>
+
+        <div id="tab-library" class="tab-content">
+          <div class="card glz-surface-glass metal-top reveal">
+            <h2>Saved scripts</h2>
+            <p style="font-family:var(--font-mono);font-size:.72rem;color:var(--ink-on-dark-dim);margin-bottom:14px;">Generated videos persisted to your database — these survive restarts. (Requires Cloudflare D1 configured.)</p>
+            <button class="btn btn-metal" onclick="loadLibrary()" style="margin-bottom:16px;">Refresh library</button>
+            <div id="library-list" style="font-family:var(--font-mono);font-size:.75rem;color:var(--ink-on-dark-dim);">Click “Refresh library” to load saved scripts.</div>
+            <div class="result-area" id="library-detail" style="display:none;"></div>
           </div>
         </div>
       </section>
@@ -670,13 +681,18 @@
 
       const progressFill = document.getElementById('create-fill');
       const statusEl = document.getElementById('create-status');
+      progressFill.style.width = '0%';
+      statusEl.textContent = 'Starting…';
 
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress = Math.min(progress + 2, 90);
-        progressFill.style.width = progress + '%';
-        statusEl.textContent = 'Processing...';
-      }, 2000);
+      const finish = (data) => {
+        progressFill.style.width = '100%';
+        statusEl.textContent = data && data.status === 'success' ? 'Complete' : 'Failed';
+        setTimeout(() => {
+          document.getElementById('create-progress').style.display = 'none';
+          showResult('create-result', data || { status: 'error', message: 'No result returned' });
+        }, 400);
+        btn.disabled = false;
+      };
 
       try {
         const resp = await fetch(`${API}/create`, {
@@ -690,19 +706,25 @@
             niche: document.getElementById('audience').value
           })
         });
-        const data = await resp.json();
-        clearInterval(interval);
-        progressFill.style.width = '100%';
-        statusEl.textContent = data.status === 'success' ? 'Complete' : 'Failed';
-        setTimeout(() => {
-          document.getElementById('create-progress').style.display = 'none';
-          showResult('create-result', data);
-        }, 500);
+        const start = await resp.json();
+        const taskId = start.task_id;
+        // Backward-compat: if the API still returns the full result inline, just render it.
+        if (!taskId || start.status === 'success' || start.status === 'error') { finish(start); return; }
+
+        // Non-blocking: the pipeline runs in the background — poll until it finishes.
+        const poll = setInterval(async () => {
+          try {
+            const s = await (await fetch(`${API}/tasks/${taskId}`)).json();
+            progressFill.style.width = (s.progress || 5) + '%';
+            statusEl.textContent = s.current_agent ? `Processing — ${s.current_agent}…` : 'Processing…';
+            if (s.status === 'completed') { clearInterval(poll); finish(s.result || { status: 'error', message: 'Completed without a result' }); }
+            else if (s.status === 'failed') { clearInterval(poll); finish(s.result || { status: 'error', message: 'Generation failed' }); }
+          } catch (e) { /* transient network hiccup — keep polling */ }
+        }, 2000);
       } catch (err) {
-        clearInterval(interval);
         statusEl.textContent = 'Error: ' + err.message;
+        btn.disabled = false;
       }
-      btn.disabled = false;
     }
 
     async function batchCreate() {
@@ -776,6 +798,44 @@
         document.getElementById('tasks-list').innerHTML = html;
       } catch (err) {
         document.getElementById('tasks-list').innerHTML = `<p style="color:var(--ember);font-family:var(--font-mono);font-size:.75rem;">Error: ${err.message}</p>`;
+      }
+    }
+
+    async function loadLibrary() {
+      const listEl = document.getElementById('library-list');
+      const detailEl = document.getElementById('library-detail');
+      detailEl.style.display = 'none';
+      listEl.innerHTML = 'Loading…';
+      try {
+        const data = await (await fetch(`${API}/videos?limit=50`)).json();
+        const videos = data.data || [];
+        if (!videos.length) { listEl.innerHTML = 'No saved scripts yet. Generate one in Create Video — it’ll appear here once the database is configured.'; return; }
+        let html = `<p style="margin-bottom:10px;"><span class="status-badge status-success">${videos.length} saved</span></p><ul>`;
+        videos.forEach(v => {
+          const when = (v.created_at || '').replace('T', ' ').slice(0, 16);
+          html += `<li><strong style="color:var(--ink-on-dark);">${v.title || v.topic || v.id}</strong>` +
+            `<br><span style="color:var(--ink-on-dark-dim);font-size:.7rem;">${when} · ${v.niche || 'general'}</span>` +
+            `<br><button class="btn btn-metal" style="margin-top:8px;" onclick="viewSaved('${v.id}')">View script</button></li>`;
+        });
+        html += '</ul>';
+        listEl.innerHTML = html;
+      } catch (err) {
+        listEl.innerHTML = `<span style="color:var(--ember);">Error: ${err.message}</span>`;
+      }
+    }
+
+    async function viewSaved(id) {
+      const detailEl = document.getElementById('library-detail');
+      detailEl.style.display = 'block';
+      detailEl.textContent = 'Loading…';
+      try {
+        const v = await (await fetch(`${API}/videos/${id}`)).json();
+        const r = v.result || {};
+        const script = r.script || {};
+        detailEl.textContent = script.full_script || JSON.stringify(r, null, 2) || 'No script content';
+        detailEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (err) {
+        detailEl.textContent = 'Error: ' + err.message;
       }
     }
 

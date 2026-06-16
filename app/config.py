@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     app_name: str = "LogiclemonAI - Content Creator"
     app_version: str = "2.0.0"
     debug: bool = False
+    # Comma-separated allowed CORS origins. "*" = allow all (credentials are then disabled per the CORS spec).
+    cors_allow_origins: str = os.getenv("CORS_ALLOW_ORIGINS", "*")
 
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")

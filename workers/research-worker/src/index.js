@@ -11,7 +11,10 @@ export default {
     }
 
     const auth = request.headers.get('Authorization');
-    if (env.API_TOKEN && auth !== `Bearer ${env.API_TOKEN}`) {
+    if (!env.API_TOKEN) {
+      return new Response(JSON.stringify({ error: 'Server misconfigured: API_TOKEN is not set' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (auth !== `Bearer ${env.API_TOKEN}`) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
     }
 
