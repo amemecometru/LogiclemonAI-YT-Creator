@@ -3,13 +3,14 @@ import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import httpx
-from fastapi import APIRouter, Query, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Query, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 from app.core.yt_pipeline import YTPipeline
 from app.models.youtube import AnalyticsSnapshot
 from app.models.content import ContentStatus
 from app.config import settings
 from app.services.youtube_service import YouTubeService
+from app.auth import require_api_key, generate_api_key
 
 
 router = APIRouter(prefix="/api/v1/yt", tags=["youtube"])
@@ -29,8 +30,13 @@ class XPostRequest(BaseModel):
     text: Optional[str] = None
 
 
+class ApiKeyRequest(BaseModel):
+    email: str
+    name: str = "default"
+
+
 @router.post("/create")
-async def create_video(request: CreateVideoRequest, background_tasks: BackgroundTasks):
+async def create_video(request: CreateVideoRequest, background_tasks: BackgroundTasks, _auth=Depends(require_api_key)):
     # Non-blocking: register the task, run the pipeline in the background, return the id immediately.
     # Clients poll GET /tasks/{task_id} until status is "completed" (the result is included there).
     task_id = pipeline.register_task()
@@ -98,7 +104,8 @@ async def list_tasks():
 
 @router.post("/plan")
 async def generate_plan(niche: str = Query(...), month: str = Query(None),
-                         num_videos: int = Query(8), audience: str = Query("general audience")):
+                         num_videos: int = Query(8), audience: str = Query("general audience"),
+                         _auth=Depends(require_api_key)):
     month = month or datetime.now().strftime("%B %Y")
     result = await pipeline.generate_content_plan(niche, month, num_videos, audience)
     return result
@@ -109,7 +116,8 @@ async def batch_create(topics: List[str],
                         target_audience: str = Query("general audience"),
                         video_length: str = Query("medium"),
                         tone: str = Query("professional"),
-                        niche: str = Query("general")):
+                        niche: str = Query("general"),
+                        _auth=Depends(require_api_key)):
     results = await pipeline.create_batch(
         topics=topics,
         target_audience=target_audience,
@@ -205,3 +213,43 @@ async def x_post(req: XPostRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"X worker request failed: {e}")
+
+
+@router.post("/keys")
+async def create_key(req: ApiKeyRequest):
+    """Issue a real, server-validated API key for an email (creates the user if needed)."""
+    user = await pipeline.db.get_or_create_user(req.email)
+    if not user:
+        raise HTTPException(status_code=503, detail="Database not configured — cannot issue keys.")
+    k = generate_api_key()
+    key_id = await pipeline.db.create_api_key(user["id"], req.name, k["key_hash"], k["prefix"])
+    return {
+        "id": key_id,
+        "api_key": k["raw"],
+        "prefix": k["prefix"],
+        "name": req.name,
+        "note": "Copy this key now — it is not shown again.",
+    }
+
+
+@router.get("/keys")
+async def list_keys(email: str = Query(...)):
+    """List a user's API keys (prefixes + metadata only — never the raw key)."""
+    user = await pipeline.db.get_user_by_email(email)
+    if not user:
+        return {"keys": []}
+    keys = await pipeline.db.list_api_keys(user["id"])
+    return {"keys": [
+        {"id": k.get("id"), "name": k.get("name"), "prefix": k.get("prefix"),
+         "revoked": bool(k.get("revoked")), "created_at": k.get("created_at"),
+         "last_used_at": k.get("last_used_at")}
+        for k in keys
+    ]}
+
+
+@router.delete("/keys/{key_id}")
+async def revoke_key(key_id: str):
+    ok = await pipeline.db.revoke_api_key(key_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Key not found.")
+    return {"id": key_id, "revoked": True}
