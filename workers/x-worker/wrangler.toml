@@ -1,0 +1,24 @@
+name = "logiclemonai-x"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+account_id = "8a460817bc554362e040644c8e003fb9"
+
+# KV namespace for PKCE state + the connected account's tokens.
+# Create it first:  wrangler kv namespace create X_KV
+# then paste the returned id below.
+[[kv_namespaces]]
+binding = "X_KV"
+id = "REPLACE_WITH_KV_ID"
+
+[vars]
+# After first deploy you'll know the worker URL; set the redirect to <worker-url>/x/callback
+# and register that EXACT URL in your X app's OAuth2 settings.
+X_REDIRECT_URI = "https://logiclemonai-x.<your-subdomain>.workers.dev/x/callback"
+X_SCOPES = "tweet.read tweet.write users.read offline.access"
+# Optional: send users back to the studio after connecting (absolute URL). Leave blank to show a confirmation page.
+POST_SUCCESS_REDIRECT = ""
+
+# Secrets (NEVER put these in this file — set via wrangler):
+#   wrangler secret put X_CLIENT_ID
+#   wrangler secret put X_CLIENT_SECRET
+#   wrangler secret put API_TOKEN        # gates POST /x/post (server-to-server)
