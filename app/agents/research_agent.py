@@ -50,7 +50,7 @@ class ResearchAgent(BaseAgent):
                 "status": "success",
                 "research_data": structured_research,
                 "confidence_score": structured_research.get("confidence_score", 0.6),
-                "sources_found": len(yt.get("sources", [])),
+                "sources_found": len(structured_research.get("sources", [])),
                 "research_method": "llm"
             }
 
