@@ -1,58 +1,55 @@
 export default {
   async fetch(request, env) {
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' }
-      });
-    }
-
-    if (request.method !== 'POST') {
-      return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { 'Content-Type': 'application/json' } });
-    }
+    if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
+    if (request.method !== 'POST') return cors(json({ error: 'Method not allowed' }, 405));
 
     const auth = request.headers.get('Authorization');
-    if (!env.API_TOKEN) {
-      return new Response(JSON.stringify({ error: 'Server misconfigured: API_TOKEN is not set' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-    if (auth !== `Bearer ${env.API_TOKEN}`) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
-    }
+    if (!env.API_TOKEN) return cors(json({ error: 'Server misconfigured: API_TOKEN is not set' }, 500));
+    if (auth !== `Bearer ${env.API_TOKEN}`) return cors(json({ error: 'Unauthorized' }, 401));
 
     try {
-      const body = await request.json();
-      const topic = body.topic || '';
-      const maxResults = Math.min(body.max_results || 5, 10);
+      const body = await request.json().catch(() => ({}));
+      const topic = (body.topic || '').trim();
+      const maxResults = Math.min(parseInt(body.max_results || 5, 10) || 5, 10);
+      if (!topic) return cors(json({ error: 'topic is required' }, 400));
 
-      if (!topic) {
-        return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      const cacheKey = `r:${maxResults}:${topic.toLowerCase()}`;
+
+      // Optional KV cache — bind RESEARCH_CACHE to enable; the worker runs fine without it.
+      if (env.RESEARCH_CACHE) {
+        const hit = await env.RESEARCH_CACHE.get(cacheKey, 'json').catch(() => null);
+        if (hit) return cors(json({ status: 'success', results: hit, source: 'cache' }));
       }
 
-      const results = await searchWeb(topic, maxResults);
-      const scraped = await scrapeResults(results);
+      const links = await searchWeb(topic, maxResults);
+      const scraped = await scrapeResults(links);
 
-      return new Response(JSON.stringify({ status: 'success', results: scraped, source: 'cloudflare-research' }), {
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
+      if (env.RESEARCH_CACHE && scraped.length) {
+        // 6h TTL; never fail the request if the cache write errors.
+        await env.RESEARCH_CACHE.put(cacheKey, JSON.stringify(scraped), { expirationTtl: 21600 }).catch(() => {});
+      }
+      return cors(json({ status: 'success', results: scraped, source: 'cloudflare-research' }));
     } catch (err) {
-      return new Response(JSON.stringify({ status: 'error', message: err.message }), {
-        status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
+      return cors(json({ status: 'error', message: String((err && err.message) || err) }, 500));
     }
-  }
+  },
 };
 
 async function searchWeb(topic, maxResults) {
-  const resp = await fetch('https://lite.duckduckgo.com/lite/', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'Mozilla/5.0 (compatible; LogiclemonAI/1.0)'
-    },
-    body: `q=${encodeURIComponent(topic)}`
-  });
-  const html = await resp.text();
+  let html = '';
+  try {
+    const resp = await fetch('https://lite.duckduckgo.com/lite/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (compatible; LogiclemonAI/1.0)' },
+      body: `q=${encodeURIComponent(topic)}`,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return [];          // DDG rate-limit / error — degrade to no sources
+    html = await resp.text();
+  } catch {
+    return [];
+  }
 
-  const results = [];
   const linkRegex = /<a[^>]+href=(["'])([^"']+)\1[^>]*class=(["'])result-link\3[^>]*>([\s\S]*?)<\/a>/gi;
   const snippetRegex = /<td[^>]*class=(["'])result-snippet\1[^>]*>([\s\S]*?)<\/td>/gi;
 
@@ -61,65 +58,63 @@ async function searchWeb(topic, maxResults) {
   while ((m = linkRegex.exec(html)) !== null && links.length < maxResults) {
     links.push({ href: m[2], title: stripHtml(m[4]).trim() });
   }
-
   const snippets = [];
   while ((m = snippetRegex.exec(html)) !== null && snippets.length < maxResults) {
     snippets.push(stripHtml(m[2]).trim());
   }
 
+  const results = [];
   for (let i = 0; i < Math.min(links.length, maxResults); i++) {
     results.push({
       title: links[i].title,
       url: links[i].href.startsWith('http') ? links[i].href : `https://${links[i].href}`,
       snippet: snippets[i] || '',
-      source: 'DuckDuckGo'
+      source: 'DuckDuckGo',
     });
   }
-
   return results;
 }
 
 async function scrapeResults(results) {
-  const out = [];
-  for (const r of results) {
+  // Fetch result pages concurrently; each has its own timeout and falls back to the snippet.
+  return Promise.all(results.map(async (r) => {
     try {
       const resp = await fetch(r.url, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(5000),
       });
+      if (!resp.ok) throw new Error('non-200');
       const html = await resp.text();
-      const text = extractText(html).substring(0, 3000);
-      out.push({
-        title: r.title,
-        url: r.url,
-        content: text,
-        snippet: r.snippet,
-        credibility_score: 0.7
-      });
+      return { title: r.title, url: r.url, content: extractText(html), snippet: r.snippet, credibility_score: 0.7 };
     } catch {
-      out.push({
-        title: r.title,
-        url: r.url,
-        content: r.snippet,
-        snippet: r.snippet,
-        credibility_score: 0.5
-      });
+      return { title: r.title, url: r.url, content: r.snippet, snippet: r.snippet, credibility_score: 0.5 };
     }
-  }
-  return out;
+  }));
 }
 
 function extractText(html) {
-  let text = html
+  return html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&[^;]+;/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
-  return text.substring(0, 3000);
+    .trim()
+    .substring(0, 3000);
 }
 
 function stripHtml(html) {
   return html.replace(/<[^>]+>/g, '').replace(/&[^;]+;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+function cors(resp) {
+  const h = new Headers(resp.headers);
+  h.set('Access-Control-Allow-Origin', '*');
+  h.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  h.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: h });
 }
