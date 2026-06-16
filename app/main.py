@@ -21,10 +21,14 @@ app = FastAPI(
     description="AI-powered YouTube content creation pipeline with multi-agent system"
 )
 
+# CORS: "*" origins + credentials=True is rejected by browsers and is insecure. This API
+# authenticates via header API keys (not cookies), so credentials are only enabled when
+# explicit origins are configured via CORS_ALLOW_ORIGINS.
+_cors_origins = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

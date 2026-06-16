@@ -2,10 +2,11 @@ import json
 import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from app.core.yt_pipeline import YTPipeline
 from app.models.youtube import AnalyticsSnapshot
+from app.models.content import ContentStatus
 
 
 router = APIRouter(prefix="/api/v1/yt", tags=["youtube"])
@@ -21,15 +22,20 @@ class CreateVideoRequest(BaseModel):
 
 
 @router.post("/create")
-async def create_video(request: CreateVideoRequest):
-    result = await pipeline.create_video_content(
+async def create_video(request: CreateVideoRequest, background_tasks: BackgroundTasks):
+    # Non-blocking: register the task, run the pipeline in the background, return the id immediately.
+    # Clients poll GET /tasks/{task_id} until status is "completed" (the result is included there).
+    task_id = pipeline.register_task()
+    background_tasks.add_task(
+        pipeline.create_video_content,
         topic=request.topic,
         target_audience=request.target_audience,
         video_length=request.video_length,
         tone=request.tone,
-        niche=request.niche
+        niche=request.niche,
+        task_id=task_id,
     )
-    return result
+    return {"task_id": task_id, "status": "processing"}
 
 
 @router.get("/tasks/{task_id}")
@@ -52,10 +58,7 @@ async def cancel_task(task_id: str):
 async def list_tasks():
     return {
         "active_tasks": [
-            {
-                "task_id": tid,
-                **info
-            }
+            {"task_id": tid, **{k: v for k, v in info.items() if k != "result"}}
             for tid, info in pipeline.active_tasks.items()
         ]
     }
@@ -89,15 +92,36 @@ async def batch_create(topics: List[str],
     }
 
 
+@router.get("/videos")
+async def list_videos(limit: int = Query(20), offset: int = Query(0)):
+    """Persisted video results — these survive restarts when D1 is configured."""
+    return await pipeline.db.list_yt_videos(limit=limit, offset=offset)
+
+
+@router.get("/videos/{video_id}")
+async def get_video(video_id: str):
+    v = await pipeline.db.get_yt_video(video_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return v
+
+
 @router.get("/export/{task_id}")
 async def export_script(task_id: str, format: str = Query("plain")):
+    # In-memory first; fall back to the persisted store so exports survive a restart.
     task = pipeline.active_tasks.get(task_id)
-    if not task or task["status"] not in ["completed", "COMPLETED", "completed"]:
+    result = task.get("result") if task and task.get("status") == ContentStatus.COMPLETED else None
+    if result is None:
+        persisted = await pipeline.db.get_yt_video(task_id)
+        result = persisted.get("result") if persisted else None
+    if not result:
         raise HTTPException(status_code=404, detail="Task not found or not completed")
 
-    try:
-        tid_int = int(task_id.split("_")[1])
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Cannot retrieve script for this task")
-
-    return {"error": "Script data not available for this task. Use create endpoint directly."}
+    script = result.get("script", {}) or {}
+    if format == "plain":
+        return {
+            "task_id": task_id,
+            "title": script.get("title", ""),
+            "script": script.get("full_script", ""),
+        }
+    return {"task_id": task_id, "format": format, "result": result}

@@ -5,7 +5,10 @@ export default {
     }
 
     const auth = request.headers.get('Authorization');
-    if (env.API_TOKEN && auth !== `Bearer ${env.API_TOKEN}`) {
+    if (!env.API_TOKEN) {
+      return cors(new Response(JSON.stringify({ error: 'Server misconfigured: API_TOKEN is not set' }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+    }
+    if (auth !== `Bearer ${env.API_TOKEN}`) {
       return cors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
     }
 
@@ -66,6 +69,17 @@ export default {
       }
       else if (request.method === 'GET' && path === '/quality_assessments') {
         result = await listRecords(env.DB, 'quality_assessments', url.searchParams);
+      }
+
+      // yt_videos (YouTube pipeline results — persisted scripts/metadata/thumbnail)
+      else if (request.method === 'POST' && path === '/yt_videos') {
+        result = await createRecord(env.DB, 'yt_videos', await request.json());
+      }
+      else if (request.method === 'GET' && (m = path.match(/^\/yt_videos\/(.+)$/))) {
+        result = await getRecord(env.DB, 'yt_videos', m[1]);
+      }
+      else if (request.method === 'GET' && path === '/yt_videos') {
+        result = await listRecords(env.DB, 'yt_videos', url.searchParams);
       }
 
       // stats
@@ -194,7 +208,7 @@ async function getContentWithRequest(db, contentId) {
 function parseJsonFields(row) {
   if (!row) return row;
   const parsed = { ...row };
-  for (const key of ['metadata', 'input_data', 'output_data', 'details']) {
+  for (const key of ['metadata', 'input_data', 'output_data', 'details', 'result']) {
     if (typeof parsed[key] === 'string') {
       try { parsed[key] = JSON.parse(parsed[key]); } catch {}
     }
