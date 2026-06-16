@@ -30,23 +30,37 @@ class ResearchAgent(BaseAgent):
                 results = await self._cloudflare_research(topic, max_results)
                 if results:
                     structured = await self._structure_enhanced_findings(results, topic)
+                    yt_data = await self._youtube_search(topic)
+                    structured["youtube_competitors"] = yt_data.get("youtube_competitors", [])
+                    existing_urls = {s.get("url") for s in structured.get("sources", [])}
+                    for s in yt_data.get("sources", []):
+                        if s["url"] not in existing_urls:
+                            structured.setdefault("sources", []).append(s)
+                            existing_urls.add(s["url"])
                     self.update_status(ContentStatus.COMPLETED)
                     return {
                         "status": "success",
                         "research_data": structured,
                         "confidence_score": self._calculate_enhanced_confidence(structured),
-                        "sources_found": len(results),
+                        "sources_found": len(results) + len(yt_data.get("sources", [])),
                         "research_method": "cloudflare"
                     }
 
             print("Using LLM-based research fallback")
             structured_research = await self._llm_research(topic)
+            yt_data = await self._youtube_search(topic)
+            structured_research["youtube_competitors"] = yt_data.get("youtube_competitors", [])
+            existing_urls = {s.get("url") for s in structured_research.get("sources", [])}
+            for s in yt_data.get("sources", []):
+                if s["url"] not in existing_urls:
+                    structured_research.setdefault("sources", []).append(s)
+                    existing_urls.add(s["url"])
             self.update_status(ContentStatus.COMPLETED)
             return {
                 "status": "success",
                 "research_data": structured_research,
                 "confidence_score": structured_research.get("confidence_score", 0.6),
-                "sources_found": 0,
+                "sources_found": len(structured_research.get("sources", [])),
                 "research_method": "llm"
             }
 
@@ -58,6 +72,71 @@ class ResearchAgent(BaseAgent):
                 "message": str(e),
                 "research_data": ResearchData().model_dump()
             }
+
+    async def _youtube_search(self, topic: str, max_results: int = 8) -> Dict[str, Any]:
+        if not settings.youtube_api_key:
+            return {"youtube_competitors": [], "sources": []}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                search_resp = await client.get(
+                    "https://www.googleapis.com/youtube/v3/search",
+                    params={
+                        "part": "snippet",
+                        "q": topic,
+                        "type": "video",
+                        "maxResults": max_results,
+                        "order": "viewCount",
+                        "key": settings.youtube_api_key,
+                    }
+                )
+                if search_resp.status_code != 200:
+                    return {"youtube_competitors": [], "sources": []}
+                search_items = search_resp.json().get("items", [])
+                if not search_items:
+                    return {"youtube_competitors": [], "sources": []}
+
+                video_ids = [item["id"]["videoId"] for item in search_items if item.get("id", {}).get("videoId")]
+                if not video_ids:
+                    return {"youtube_competitors": [], "sources": []}
+
+                stats_resp = await client.get(
+                    "https://www.googleapis.com/youtube/v3/videos",
+                    params={
+                        "part": "statistics,snippet",
+                        "id": ",".join(video_ids),
+                        "key": settings.youtube_api_key,
+                    }
+                )
+                competitors = []
+                sources = []
+                if stats_resp.status_code == 200:
+                    for item in stats_resp.json().get("items", []):
+                        snippet = item.get("snippet", {})
+                        stats = item.get("statistics", {})
+                        entry = {
+                            "video_id": item["id"],
+                            "title": snippet.get("title", ""),
+                            "channel": snippet.get("channelTitle", ""),
+                            "published_at": snippet.get("publishedAt", ""),
+                            "views": int(stats.get("viewCount", 0)),
+                            "likes": int(stats.get("likeCount", 0)),
+                            "comment_count": int(stats.get("commentCount", 0)),
+                            "thumbnail": snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
+                        }
+                        competitors.append(entry)
+                        sources.append({
+                            "title": snippet.get("title", ""),
+                            "url": f"https://youtube.com/watch?v={item['id']}",
+                            "source": "YouTube",
+                            "credibility_score": 0.8,
+                        })
+                return {
+                    "youtube_competitors": competitors,
+                    "sources": sources,
+                }
+        except Exception as e:
+            print(f"YouTube research failed: {e}")
+            return {"youtube_competitors": [], "sources": []}
 
     async def validate_input(self, input_data: Dict[str, Any]) -> bool:
         required_fields = ["topic"]

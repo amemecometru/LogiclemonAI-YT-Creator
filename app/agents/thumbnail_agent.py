@@ -1,7 +1,13 @@
-from typing import Dict, Any, List
+import json
+import base64
+import httpx
+import hashlib
+import os
+from typing import Dict, Any, List, Optional
 from app.agents.base_agent import BaseAgent
 from app.models.content import AgentType, ContentStatus
 from app.models.youtube import ThumbnailDesign
+from app.config import settings
 
 
 class ThumbnailAgent(BaseAgent):
@@ -29,6 +35,8 @@ class ThumbnailAgent(BaseAgent):
             text_overlay = await self._generate_text_overlay(title, topic)
             generation_prompt = await self._generate_ai_prompt(concept, composition, color_scheme, text_overlay)
 
+            thumbnail_data = await self._render_thumbnail(generation_prompt, title)
+
             thumbnail = ThumbnailDesign(
                 video_title=title,
                 concept_description=concept,
@@ -36,6 +44,7 @@ class ThumbnailAgent(BaseAgent):
                 color_scheme=color_scheme,
                 text_overlay=text_overlay,
                 ai_generation_prompt=generation_prompt,
+                thumbnail_url=thumbnail_data.get("url", ""),
                 style_notes=f"Design for {niche} niche. Focus on high contrast, readable text, and emotional trigger."
             )
 
@@ -53,6 +62,60 @@ class ThumbnailAgent(BaseAgent):
                 "message": str(e),
                 "thumbnail": None
             }
+
+    async def _render_thumbnail(self, prompt: str, title: str) -> Dict[str, Any]:
+        image_data = await self._render_via_openrouter(prompt)
+        if image_data:
+            return image_data
+        image_data = await self._render_via_pollinations(prompt)
+        if image_data:
+            return image_data
+        return {"url": "", "format": ""}
+
+    async def _render_via_openrouter(self, prompt: str) -> Optional[Dict[str, Any]]:
+        if not settings.openai_api_key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{settings.openai_base_url or 'https://openrouter.ai/api/v1'}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.openai_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "black-forest-labs/flux-schnell",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 1000,
+                    }
+                )
+                if resp.status_code != 200:
+                    return None
+                data = resp.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if not content:
+                    return None
+                if "![img]" in content:
+                    import re
+                    urls = re.findall(r'https?://[^\s)]+', content)
+                    if urls:
+                        return {"url": urls[0], "format": "image/png"}
+                return {"url": content.strip(), "format": "text/markdown"}
+        except Exception as e:
+            print(f"OpenRouter thumbnail render failed: {e}")
+            return None
+
+    async def _render_via_pollinations(self, prompt: str) -> Optional[Dict[str, Any]]:
+        try:
+            safe_prompt = httpx.URL(prompt).path if False else prompt.replace(" ", "%20")[:400]
+            url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nofeed=true"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.head(url)
+                if resp.status_code < 500:
+                    return {"url": url, "format": "image/jpeg"}
+                return None
+        except Exception:
+            return None
 
     async def validate_input(self, input_data: Dict[str, Any]) -> bool:
         return bool(input_data.get("topic"))

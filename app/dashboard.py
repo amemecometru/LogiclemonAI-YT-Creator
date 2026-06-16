@@ -9,6 +9,7 @@ from app.core.yt_pipeline import YTPipeline
 from app.models.youtube import AnalyticsSnapshot
 from app.models.content import ContentStatus
 from app.config import settings
+from app.services.youtube_service import YouTubeService
 
 
 router = APIRouter(prefix="/api/v1/yt", tags=["youtube"])
@@ -51,6 +52,27 @@ async def get_task_status(task_id: str):
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
+
+
+yt_service = YouTubeService()
+
+
+@router.get("/channel")
+async def get_channel():
+    stats = await yt_service.get_channel_stats()
+    videos = await yt_service.list_channel_videos(max_results=10)
+    return {
+        "stats": stats,
+        "recent_videos": [
+            {
+                "video_id": item["snippet"]["resourceId"]["videoId"],
+                "title": item["snippet"]["title"],
+                "published_at": item["snippet"]["publishedAt"],
+                "thumbnails": item["snippet"]["thumbnails"],
+            }
+            for item in videos[:10]
+        ]
+    }
 
 
 @router.delete("/tasks/{task_id}")
