@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     x_worker_url: str = os.getenv("X_WORKER_URL", "")        # e.g. https://logiclemonai-x.<sub>.workers.dev
     x_worker_token: str = os.getenv("X_WORKER_TOKEN", "")    # = the x-worker's API_TOKEN (gates POST /x/post)
 
+    # YouTube Data API v3
+    yt_oauth_client_id: str = os.getenv("YT_OAUTH_CLIENT_ID", "")
+    yt_oauth_client_secret: str = os.getenv("YT_OAUTH_CLIENT_SECRET", "")
+    youtube_api_key: str = os.getenv("YOUTUBE_API_KEY", "") or os.getenv("LOGICLEMONAI_YT_API_KEY", "")
+
     rate_limit_requests: int = 10
     rate_limit_window: int = 3600
     max_content_length: int = 5000

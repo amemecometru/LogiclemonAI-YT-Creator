@@ -1,4 +1,6 @@
-from typing import Dict, Any, List
+import urllib.parse
+import httpx
+from typing import Dict, Any, List, Optional
 from app.agents.base_agent import BaseAgent
 from app.models.content import AgentType, ContentStatus
 from app.models.youtube import ThumbnailDesign
@@ -28,6 +30,7 @@ class ThumbnailAgent(BaseAgent):
             color_scheme = self._get_color_scheme(niche, key_emotions)
             text_overlay = await self._generate_text_overlay(title, topic)
             generation_prompt = await self._generate_ai_prompt(concept, composition, color_scheme, text_overlay)
+            thumbnail_url = await self._render_thumbnail(generation_prompt)
 
             thumbnail = ThumbnailDesign(
                 video_title=title,
@@ -36,6 +39,7 @@ class ThumbnailAgent(BaseAgent):
                 color_scheme=color_scheme,
                 text_overlay=text_overlay,
                 ai_generation_prompt=generation_prompt,
+                thumbnail_url=thumbnail_url,
                 style_notes=f"Design for {niche} niche. Focus on high contrast, readable text, and emotional trigger."
             )
 
@@ -53,6 +57,20 @@ class ThumbnailAgent(BaseAgent):
                 "message": str(e),
                 "thumbnail": None
             }
+
+    async def _render_thumbnail(self, prompt: str) -> str:
+        """Render a real 1280x720 thumbnail from the prompt via Pollinations (free, no key).
+        Returns an image URL (best-effort; empty string on failure)."""
+        try:
+            encoded = urllib.parse.quote((prompt or "")[:400], safe="")
+            url = f"https://image.pollinations.ai/prompt/{encoded}?width=1280&height=720&nologo=true&nofeed=true"
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.head(url)
+                if resp.status_code < 500:
+                    return url
+        except Exception as e:
+            print(f"Thumbnail render failed: {e}")
+        return ""
 
     async def validate_input(self, input_data: Dict[str, Any]) -> bool:
         return bool(input_data.get("topic"))

@@ -9,6 +9,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from app.models.youtube import YouTubeMetadata, AnalyticsSnapshot, UploadSchedule
+from app.config import settings
 
 
 SCOPES = [
@@ -40,10 +41,10 @@ class YouTubeService:
             if self.credentials and self.credentials.expired and self.credentials.refresh_token:
                 self.credentials.refresh(Request())
             else:
-                if not os.path.exists(self.client_secret_file):
-                    print("YouTube client_secret.json not found. YouTube upload will be unavailable.")
+                flow = self._build_flow()
+                if flow is None:
+                    print("YouTube OAuth not configured (set YT_OAUTH_CLIENT_ID/SECRET or provide client_secret.json).")
                     return None
-                flow = InstalledAppFlow.from_client_secrets_file(self.client_secret_file, SCOPES)
                 self.credentials = flow.run_local_server(port=0)
 
             with open(self.token_file, "wb") as token:
@@ -51,6 +52,24 @@ class YouTubeService:
 
         self.service = build(self.api_service_name, self.api_version, credentials=self.credentials)
         return self.service
+
+    def _build_flow(self):
+        """Prefer env-based client config (YT_OAUTH_CLIENT_ID/SECRET); fall back to a client_secret.json file."""
+        if settings.yt_oauth_client_id and settings.yt_oauth_client_secret:
+            client_config = {
+                "installed": {
+                    "client_id": settings.yt_oauth_client_id,
+                    "client_secret": settings.yt_oauth_client_secret,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "redirect_uris": ["http://localhost"],
+                }
+            }
+            return InstalledAppFlow.from_client_config(client_config, SCOPES)
+        if os.path.exists(self.client_secret_file):
+            return InstalledAppFlow.from_client_secrets_file(self.client_secret_file, SCOPES)
+        return None
 
     async def upload_video(self, video_path: str, metadata: YouTubeMetadata,
                             thumbnail_path: Optional[str] = None,

@@ -26,27 +26,31 @@ class ResearchAgent(BaseAgent):
 
             print(f"Researching: '{topic}'")
 
+            yt = await self._youtube_search(topic)
+
             if settings.cloudflare_research_url:
                 results = await self._cloudflare_research(topic, max_results)
                 if results:
                     structured = await self._structure_enhanced_findings(results, topic)
+                    self._merge_youtube(structured, yt)
                     self.update_status(ContentStatus.COMPLETED)
                     return {
                         "status": "success",
                         "research_data": structured,
                         "confidence_score": self._calculate_enhanced_confidence(structured),
-                        "sources_found": len(results),
+                        "sources_found": len(results) + len(yt.get("sources", [])),
                         "research_method": "cloudflare"
                     }
 
             print("Using LLM-based research fallback")
             structured_research = await self._llm_research(topic)
+            self._merge_youtube(structured_research, yt)
             self.update_status(ContentStatus.COMPLETED)
             return {
                 "status": "success",
                 "research_data": structured_research,
                 "confidence_score": structured_research.get("confidence_score", 0.6),
-                "sources_found": 0,
+                "sources_found": len(yt.get("sources", [])),
                 "research_method": "llm"
             }
 
@@ -58,6 +62,65 @@ class ResearchAgent(BaseAgent):
                 "message": str(e),
                 "research_data": ResearchData().model_dump()
             }
+
+    async def _youtube_search(self, topic: str, max_results: int = 8) -> Dict[str, Any]:
+        """Pull real ranking YouTube videos for the topic via Data API v3 (public read).
+        No-ops gracefully when no API key is configured."""
+        if not settings.youtube_api_key:
+            return {"youtube_competitors": [], "sources": []}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                sr = await client.get(
+                    "https://www.googleapis.com/youtube/v3/search",
+                    params={"part": "snippet", "q": topic, "type": "video",
+                            "maxResults": max_results, "order": "viewCount",
+                            "key": settings.youtube_api_key},
+                )
+                if sr.status_code != 200:
+                    print(f"YouTube search error: {sr.status_code}")
+                    return {"youtube_competitors": [], "sources": []}
+                ids = [it["id"]["videoId"] for it in sr.json().get("items", [])
+                       if it.get("id", {}).get("videoId")]
+                if not ids:
+                    return {"youtube_competitors": [], "sources": []}
+                vr = await client.get(
+                    "https://www.googleapis.com/youtube/v3/videos",
+                    params={"part": "statistics,snippet", "id": ",".join(ids),
+                            "key": settings.youtube_api_key},
+                )
+                competitors, sources = [], []
+                if vr.status_code == 200:
+                    for it in vr.json().get("items", []):
+                        sn, st = it.get("snippet", {}), it.get("statistics", {})
+                        competitors.append({
+                            "video_id": it["id"],
+                            "title": sn.get("title", ""),
+                            "channel": sn.get("channelTitle", ""),
+                            "published_at": sn.get("publishedAt", ""),
+                            "views": int(st.get("viewCount", 0)),
+                            "likes": int(st.get("likeCount", 0)),
+                            "comments": int(st.get("commentCount", 0)),
+                            "thumbnail": sn.get("thumbnails", {}).get("high", {}).get("url", ""),
+                        })
+                        sources.append({
+                            "title": sn.get("title", ""),
+                            "url": f"https://youtube.com/watch?v={it['id']}",
+                            "source": "YouTube",
+                            "credibility_score": 0.8,
+                        })
+                return {"youtube_competitors": competitors, "sources": sources}
+        except Exception as e:
+            print(f"YouTube research failed: {e}")
+            return {"youtube_competitors": [], "sources": []}
+
+    def _merge_youtube(self, research_data: Dict[str, Any], yt: Dict[str, Any]) -> None:
+        """Merge YouTube competitors + sources into a research_data dict, in place."""
+        research_data["youtube_competitors"] = yt.get("youtube_competitors", [])
+        existing = {s.get("url") for s in research_data.get("sources", [])}
+        for s in yt.get("sources", []):
+            if s.get("url") not in existing:
+                research_data.setdefault("sources", []).append(s)
+                existing.add(s.get("url"))
 
     async def validate_input(self, input_data: Dict[str, Any]) -> bool:
         required_fields = ["topic"]

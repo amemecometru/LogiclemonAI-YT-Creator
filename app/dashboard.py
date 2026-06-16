@@ -8,11 +8,13 @@ from pydantic import BaseModel
 from app.core.yt_pipeline import YTPipeline
 from app.models.youtube import AnalyticsSnapshot
 from app.models.content import ContentStatus
+from app.services.youtube_service import YouTubeService
 from app.config import settings
 
 
 router = APIRouter(prefix="/api/v1/yt", tags=["youtube"])
 pipeline = YTPipeline()
+yt_service = YouTubeService()
 
 
 class CreateVideoRequest(BaseModel):
@@ -180,3 +182,22 @@ async def x_post(req: XPostRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"X worker request failed: {e}")
+
+
+@router.get("/channel")
+async def get_channel():
+    """Connected channel's stats + recent uploads (requires YouTube OAuth)."""
+    stats = await yt_service.get_channel_stats()
+    videos = await yt_service.list_channel_videos(max_results=10)
+    return {
+        "stats": stats,
+        "recent_videos": [
+            {
+                "video_id": v.get("snippet", {}).get("resourceId", {}).get("videoId"),
+                "title": v.get("snippet", {}).get("title"),
+                "published_at": v.get("snippet", {}).get("publishedAt"),
+                "thumbnails": v.get("snippet", {}).get("thumbnails"),
+            }
+            for v in videos[:10]
+        ],
+    }

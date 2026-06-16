@@ -72,6 +72,7 @@ class ThumbnailDesign(BaseModel):
     reference_images: List[str] = Field(default_factory=list)
     style_notes: str = ""
     ai_generation_prompt: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
 
 class ChannelNiche(BaseModel):
