@@ -515,13 +515,19 @@
         <div class="section-bar"><span class="label">API Access</span><span class="line"></span></div>
         <div class="api-panel glz-surface-glass metal-top reveal">
           <h2>Create an API key</h2>
-          <p>Generate a unique key to integrate LogiclemonAI into your own tools, editors, and automation workflows.</p>
+          <p>Generate a real, server-issued key to integrate LogiclemonAI into your own tools, editors, and automation workflows. Keys are shown once.</p>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="api-key-email" class="glz-field" placeholder="you@studio.dev" autocomplete="email" spellcheck="false" style="max-width:400px;" />
+          </div>
           <div class="form-group">
             <label>Key name</label>
             <input type="text" id="api-key-name" class="glz-field" placeholder="e.g., Production" style="max-width:400px;" />
           </div>
           <button class="btn btn-primary" onclick="generateApiKey()">Generate key</button>
+          <button class="btn btn-metal" onclick="loadKeys()" style="margin-left:10px;">My keys</button>
           <div id="api-key-result" class="api-key-display"></div>
+          <div id="api-key-list" style="margin-top:14px;font-family:var(--font-mono);font-size:.72rem;color:var(--ink-on-dark-dim);"></div>
         </div>
       </section>
 
@@ -570,14 +576,47 @@
       setTimeout(() => el.remove(), 3000);
     }
 
-    function generateApiKey() {
-      const name = document.getElementById('api-key-name').value || 'default';
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-      let key = 'la_';
-      for (let i = 0; i < 48; i++) key += chars.charAt(Math.floor(Math.random() * chars.length));
+    async function generateApiKey() {
+      const email = (document.getElementById('api-key-email').value || '').trim();
+      const name = (document.getElementById('api-key-name').value || 'default').trim();
       const el = document.getElementById('api-key-result');
       el.style.display = 'block';
-      el.innerHTML = `<strong style="color:var(--teal);">${name}</strong><br><br>${key}<span class="note">Copy this key now. It will not be shown again.</span>`;
+      if (!email || !/.+@.+\..+/.test(email)) { el.innerHTML = '<span style="color:var(--ember);">Enter a valid email first.</span>'; return; }
+      el.innerHTML = 'Issuing key…';
+      try {
+        const r = await fetch(`${API}/keys`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, name }) });
+        const d = await r.json();
+        if (r.ok && d.api_key) {
+          el.innerHTML = `<strong style="color:var(--teal);">${d.name || name}</strong><br><br>${d.api_key}<span class="note">Copy this key now — it is not shown again.</span>`;
+        } else {
+          el.innerHTML = `<span style="color:var(--ember);">${d.detail || d.error || ('HTTP ' + r.status)}</span>`;
+        }
+      } catch (e) { el.innerHTML = `<span style="color:var(--ember);">Error: ${e.message}</span>`; }
+      loadKeys();
+    }
+
+    async function loadKeys() {
+      const email = (document.getElementById('api-key-email').value || '').trim();
+      const list = document.getElementById('api-key-list');
+      if (!email) { list.innerHTML = ''; return; }
+      try {
+        const d = await (await fetch(`${API}/keys?email=${encodeURIComponent(email)}`)).json();
+        const keys = d.keys || [];
+        if (!keys.length) { list.innerHTML = 'No keys yet for this email.'; return; }
+        let html = '<ul>';
+        keys.forEach(k => {
+          const status = k.revoked ? '<span style="color:var(--ember);">revoked</span>' : '<span style="color:var(--teal);">active</span>';
+          html += `<li><strong style="color:var(--ink-on-dark);">${k.prefix || ''}…</strong> ${k.name || ''} — ${status}` +
+            (k.revoked ? '' : ` <button class="x-del" onclick="revokeKey('${k.id}')">revoke</button>`) + `</li>`;
+        });
+        html += '</ul>';
+        list.innerHTML = html;
+      } catch (e) { list.innerHTML = `<span style="color:var(--ember);">Error: ${e.message}</span>`; }
+    }
+
+    async function revokeKey(id) {
+      try { await fetch(`${API}/keys/${id}`, { method: 'DELETE' }); toast('Key revoked'); loadKeys(); }
+      catch (e) { toast('Revoke failed: ' + e.message); }
     }
 
     function selectPlan(plan) {
