@@ -1,196 +1,94 @@
-# LogiclemonAI - Content Creator
+# LogiclemonAI — YouTube Content Creator
 
-A production-grade AI-powered YouTube content creation pipeline. Research topics, write scripts, optimize SEO, design thumbnails, and scale your YouTube channel - all automated.
+An AI-powered YouTube content pipeline: research a topic, write the script, optimize SEO, render a thumbnail, plan a calendar — then optionally auto-post a launch thread to X. Vanilla "Glazier" web studio + FastAPI backend + Cloudflare Workers.
 
 ## Features
 
-- **🎬 Script Writing** - YouTube-optimized scripts with hooks, retention patterns, timestamps
-- **🔍 Smart Research** - AI-powered research via Cloudflare Workers
-- **📈 YouTube SEO** - Title optimization, tag generation, description with chapters
-- **🖼️ Thumbnail Design** - AI-generated thumbnail concepts with composition guides
-- **📋 Content Planning** - AI-generated content calendars for your niche
-- **⚡ Batch Processing** - Create multiple videos at scale
-- **🎯 CLI & Dashboard** - Full CLI tool + Web dashboard for managing your pipeline
-- **📤 YouTube Publishing** - Upload, schedule, and manage videos via YouTube API
-- **📊 Analytics** - Track video performance metrics
+- **🎬 Script generation** — full YouTube scripts with hook, timestamped sections, conclusion, CTA
+- **🔍 Research** — Cloudflare research worker (DuckDuckGo) **+ real YouTube Data v3** ranking videos merged in (LLM fallback when neither is configured)
+- **📈 YouTube SEO** — title/tag/description optimization with chapters
+- **🖼️ Thumbnail** — concept + composition + a rendered **1280×720 image** (via Pollinations; free, no key)
+- **📋 Content plan** — monthly calendars for a niche · **⚡ Batch** generation
+- **📊 Channel analytics** — `GET /api/v1/yt/channel` (stats + recent uploads, via YouTube OAuth)
+- **𝕏 Auto-thread** — connect an X account (OAuth2 worker) and post a launch thread from a generated script
+- **🔑 API keys** — real, server-issued, sha256-hashed keys with optional gating + monthly quota
+- **🖥️ Studio** — single-page Glazier UI served at `/dashboard`
 
-## Quick Start
+## Architecture
 
-### Prerequisites
+```
+app/                     FastAPI
+  agents/                research, script_writer, youtube_seo, thumbnail
+  core/yt_pipeline.py    studio pipeline (research → script → seo → thumbnail)
+  services/              database_service (D1 over HTTP), youtube_service (Data API v3)
+  auth.py                API-key issuance + validation + quota
+  dashboard.py           /api/v1/yt/* router
+  main.py                app: /, /health, mounts /dashboard, includes the router
+  static/index.html      Glazier studio
+workers/
+  logiclemonai-db        D1 CRUD (content_*, yt_videos, users/api_keys/subscriptions/usage)
+  research-worker        DuckDuckGo search + scrape (optional KV cache)
+  x-worker               X (Twitter) OAuth2 + post
+```
 
-- Python 3.11+
-- OpenAI API key
-- (Optional) Cloudflare API token for Workers + D1
-- (Optional) Google Cloud OAuth 2.0 credentials for YouTube upload
-
-### Installation
+## Quick start
 
 ```bash
-git clone <repository>
-cd LogiclemonAI
-python -m venv venv
-source venv/bin/activate
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env          # fill in keys (see below)
+uvicorn app.main:app --reload --port 8000
+# open http://localhost:8000/dashboard
 ```
 
-### Configuration
+## Environment (`.env`)
+
+| Var | Need | Notes |
+|---|---|---|
+| `OPENAI_API_KEY` | **required** | OpenAI or OpenRouter key (all agents) |
+| `OPENAI_MODEL` | rec | default `gpt-4o-mini` |
+| `OPENAI_BASE_URL` | if OpenRouter | `https://openrouter.ai/api/v1` |
+| `HTTP_REFERER`, `X_TITLE` | optional | OpenRouter attribution headers (`X_TITLE` ≠ Twitter) |
+| `YOUTUBE_API_KEY` | research | YouTube Data v3 **API key** (public read). Legacy alias `LOGICLEMONAI_YT_API_KEY` also accepted. |
+| `YT_OAUTH_CLIENT_ID` / `YT_OAUTH_CLIENT_SECRET` | analytics/upload | Desktop OAuth client (channel analytics) |
+| `YT_TOKEN_FILE` | optional | OAuth token cache (default `yt_token.pickle`) |
+| `CLOUDFLARE_DB_URL` | persistence | db-worker URL |
+| `CLOUDFLARE_RESEARCH_URL` | research worker | research-worker URL |
+| `CLOUDFLARE_API_TOKEN` | if workers | **shared string** you invent — must equal the db/research workers' `API_TOKEN` (NOT your Cloudflare account token) |
+| `X_WORKER_URL` / `X_WORKER_TOKEN` | X feature | x-worker URL + its `API_TOKEN` |
+| `REQUIRE_API_KEY` | optional | `true` to gate the spend endpoints (default off) |
+| `MONTHLY_QUOTA` | optional | per-key monthly unit cap when gating is on (default 1000) |
+| `CORS_ALLOW_ORIGINS` | optional | default `*`; lock down in prod |
+
+> Note: a YouTube **API key** only unlocks public reads (search/stats). Uploads/analytics need the **OAuth** client. The pipeline currently produces a script/SEO/thumbnail package, not a video file.
+
+## Cloudflare Workers
 
 ```bash
-cp .env.example .env
-# Edit .env with your API keys
+# D1 schema
+wrangler d1 migrations apply <db>     # 0001 content, 0002 yt_videos, 0003 commerce
+# shared token (use ONE value for the app's CLOUDFLARE_API_TOKEN + both workers)
+cd workers/db-worker       && wrangler secret put API_TOKEN && wrangler deploy
+cd workers/research-worker && wrangler secret put API_TOKEN && wrangler deploy   # optional: bind RESEARCH_CACHE KV
+cd workers/x-worker        && wrangler kv namespace create X_KV \
+   && wrangler secret put X_CLIENT_ID && wrangler secret put X_CLIENT_SECRET && wrangler secret put API_TOKEN \
+   && wrangler deploy        # set X_REDIRECT_URI = <worker-url>/x/callback and register it in the X app
 ```
 
-Required:
-- `OPENAI_API_KEY` - Your OpenAI API key
+## API (selected)
 
-Optional but recommended:
-- `TAVILY_API_KEY` - For web research
-- `YT_CLIENT_SECRET_FILE` - Google OAuth client_secret.json for YouTube uploads
-
-### Usage
-
-#### Web Dashboard
-```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-Open http://localhost:8000/dashboard
-
-#### CLI Tool
-```bash
-# Create a single video script
-python -m app.cli create "How AI is Transforming Healthcare" --audience "tech enthusiasts" --show-script
-
-# Batch create from topics file
-python -m app.cli batch topics.txt --niche technology --output results.json
-
-# Generate a monthly content plan
-python -m app.cli plan "Machine Learning" --month "July 2025" --num 12
-
-# Export script for TTS/narration
-python -m app.cli export results.json --format tts --output narration.txt
-```
-
-#### API
-```bash
-# Create YouTube video content
-curl -X POST "http://localhost:8000/api/v1/yt/create" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "topic": "How AI is Transforming Healthcare",
-    "target_audience": "tech enthusiasts",
-    "video_length": "medium",
-    "tone": "professional",
-    "niche": "technology"
-  }'
-```
-
-## Pipeline Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    Input Topic                       │
-└────────────────────┬────────────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│              1. Research Agent (Cloudflare + AI)     │
-│     Gathers sources, key findings, statistics        │
-└────────────────────┬────────────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│            2. Script Writer Agent (OpenAI)           │
-│   Hook, sections with timestamps, conclusion, CTA   │
-└────────────────────┬────────────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│            3. YouTube SEO Agent (OpenAI)             │
-│  Title optimization, tags, description, chapters    │
-└────────────────────┬────────────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│            4. Thumbnail Agent (OpenAI)               │
-│   Concept, composition, colors, text overlay        │
-└────────────────────┬────────────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│             5. Final Output Package                  │
-│  Full script + SEO metadata + Thumbnail design      │
-└─────────────────────────────────────────────────────┘
-```
-
-## Project Structure
-
-```
-LogiclemonAI/
-├── app/
-│   ├── agents/
-│   │   ├── base_agent.py          # Abstract base class
-│   │   ├── research_agent.py      # Cloudflare Worker research
-│   │   ├── writer_agent.py        # Blog/article writer
-│   │   ├── script_writer_agent.py # YouTube script writer
-│   │   ├── youtube_seo_agent.py   # YouTube SEO optimizer
-│   │   └── thumbnail_agent.py     # Thumbnail designer
-│   ├── core/
-│   │   ├── orchestrator.py        # Original content orchestrator
-│   │   └── yt_pipeline.py         # YouTube pipeline orchestrator
-│   ├── models/
-│   │   ├── content.py             # Original content models
-│   │   └── youtube.py             # YouTube-specific models
-│   ├── services/
-│   │   ├── database_service.py    # Cloudflare D1 integration
-│   │   └── youtube_service.py     # YouTube API v3 integration
-│   ├── dashboard.py               # API router for YT endpoints
-│   ├── cli.py                     # Command-line interface
-│   ├── scheduler.py               # Upload scheduling system
-│   ├── main.py                    # FastAPI application
-│   ├── config.py                  # Configuration
-│   └── static/
-│       └── index.html             # Web dashboard
-├── tests/
-│   ├── test_agents.py
-│   ├── test_orchestrator.py
-│   ├── test_yt_pipeline.py
-│   ├── test_script_writer.py
-│   ├── test_seo_agent.py
-│   ├── test_thumbnail_agent.py
-│   └── test_cli.py
-├── requirements.txt
-├── .env.example
-└── README.md
-```
+- `POST /api/v1/yt/create` → `{task_id}` (background); poll `GET /api/v1/yt/tasks/{id}`
+- `POST /api/v1/yt/batch`, `POST /api/v1/yt/plan`
+- `GET /api/v1/yt/videos`, `GET /api/v1/yt/videos/{id}` (persisted)
+- `GET /api/v1/yt/channel` (YouTube OAuth)
+- `POST/GET/DELETE /api/v1/yt/keys` (API keys)
+- `GET /api/v1/yt/x/config`, `POST /api/v1/yt/x/post` (X auto-thread proxy)
 
 ## Testing
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=app --cov-report=term-missing
-
-# Run specific test file
-pytest tests/test_yt_pipeline.py -v
+pytest                 # or: pytest --cov=app
 ```
-
-## YouTube API Setup
-
-To enable YouTube upload and analytics:
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a new project or select existing
-3. Enable YouTube Data API v3
-4. Create OAuth 2.0 credentials (Desktop application type)
-5. Download `client_secret.json` to project root
-6. First upload will trigger OAuth flow (saves token to `yt_token.pickle`)
-
-## Commercial Production Ready
-
-This pipeline is built for scale:
-- **Async architecture** handles concurrent video creation
-- **Graceful degradation** when APIs are unavailable
-- **Comprehensive error handling** at every stage
-- **Modular agents** can be extended or replaced
-- **Batch processing** for high-volume content operations
-- **Scheduling system** for automated publishing
 
 ## License
 
