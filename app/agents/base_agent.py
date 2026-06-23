@@ -51,11 +51,23 @@ class BaseAgent(ABC):
         if self.execution_start_time:
             task.execution_time = int(time.time() - self.execution_start_time)
     
-    async def call_openai(self, messages: list, **kwargs) -> str:
-        """Make a call to OpenAI API with error handling."""
+    def _client_for(self, byok_key: str | None = None):
+        if not byok_key:
+            return self.client
+        kwargs = {"api_key": byok_key}
+        base = self.config.get("base_url")
+        if base:
+            kwargs["base_url"] = base
+        if self.config.get("default_headers"):
+            kwargs["default_headers"] = self.config["default_headers"]
+        return openai.AsyncOpenAI(**kwargs)
+
+    async def call_openai(self, messages: list, model: str | None = None, byok_key: str | None = None, **kwargs) -> str:
         try:
-            response = await self.client.chat.completions.create(
-                model=self.config["model"],
+            chosen_model = model or self.config["model"]
+            client = self._client_for(byok_key)
+            response = await client.chat.completions.create(
+                model=chosen_model,
                 messages=messages,
                 max_tokens=kwargs.get("max_tokens", self.config["max_tokens"]),
                 temperature=kwargs.get("temperature", self.config["temperature"]),

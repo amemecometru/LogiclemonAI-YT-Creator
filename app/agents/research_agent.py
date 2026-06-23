@@ -23,13 +23,15 @@ class ResearchAgent(BaseAgent):
             max_results = input_data.get("max_results", 10)
             include_domains = input_data.get("include_domains", [])
             exclude_domains = input_data.get("exclude_domains", [])
+            model = input_data.get("model")
+            byok_key = input_data.get("byok_key")
 
             print(f"Researching: '{topic}'")
 
             if settings.cloudflare_research_url:
                 results = await self._cloudflare_research(topic, max_results)
                 if results:
-                    structured = await self._structure_enhanced_findings(results, topic)
+                    structured = await self._structure_enhanced_findings(results, topic, model=model, byok_key=byok_key)
                     yt_data = await self._youtube_search(topic)
                     structured["youtube_competitors"] = yt_data.get("youtube_competitors", [])
                     existing_urls = {s.get("url") for s in structured.get("sources", [])}
@@ -47,7 +49,7 @@ class ResearchAgent(BaseAgent):
                     }
 
             print("Using LLM-based research fallback")
-            structured_research = await self._llm_research(topic)
+            structured_research = await self._llm_research(topic, model=model, byok_key=byok_key)
             yt_data = await self._youtube_search(topic)
             structured_research["youtube_competitors"] = yt_data.get("youtube_competitors", [])
             existing_urls = {s.get("url") for s in structured_research.get("sources", [])}
@@ -167,7 +169,7 @@ class ResearchAgent(BaseAgent):
             print(f"Cloudflare research request failed: {e}")
             return []
 
-    async def _llm_research(self, topic: str) -> Dict[str, Any]:
+    async def _llm_research(self, topic: str, model: str | None = None, byok_key: str | None = None) -> Dict[str, Any]:
         prompt = f"""You are a research assistant. Provide comprehensive research about "{topic}".
 
 Return a JSON object with this exact structure:
@@ -191,7 +193,7 @@ Return ONLY valid JSON."""
 
         messages = [{"role": "user", "content": prompt}]
         try:
-            response = await self.call_openai(messages, max_tokens=2000)
+            response = await self.call_openai(messages, model=model, byok_key=byok_key, max_tokens=2000)
             response = response.strip()
             if response.startswith("```json"):
                 response = response[7:]
@@ -232,7 +234,7 @@ Return ONLY valid JSON."""
                 "has_recent_content": False
             }
 
-    async def _structure_enhanced_findings(self, sources: List[Dict[str, Any]], topic: str) -> Dict[str, Any]:
+    async def _structure_enhanced_findings(self, sources: List[Dict[str, Any]], topic: str, model: str | None = None, byok_key: str | None = None) -> Dict[str, Any]:
         if not sources:
             return ResearchData().model_dump()
 
@@ -282,7 +284,7 @@ Content: {source.get('content', '')[:600]}...
         messages = [{"role": "user", "content": prompt}]
 
         try:
-            response = await self.call_openai(messages, max_tokens=2000)
+            response = await self.call_openai(messages, model=model, byok_key=byok_key, max_tokens=2000)
 
             response = response.strip()
             if response.startswith("```json"):

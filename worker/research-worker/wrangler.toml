@@ -1,0 +1,7 @@
+name = "logiclemonai-research"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+account_id = "8a460817bc554362e040644c8e003fb9"
+
+[vars]
+# API_TOKEN set via wrangler secret

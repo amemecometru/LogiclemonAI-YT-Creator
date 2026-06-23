@@ -1,131 +1,164 @@
-# LogiclemonAI YT-Creator — Build Handoff & Roadmap to v1
+why is this specific openai/gpt-40-mini model slug <- this smells of something hard coded in the files from 2024, if I'm wrong ok no problem but if that's correct I'd like to change this No.1 to better more updated models I can literally use an Open Weight gemma-4-edge model that's faster and FREE with the openrouter endpoint and I've used it surprisingly without interruption I can also use a paid endpoint that is really cheap with these open weight models - also I wanted to say this earlier - a lot of content creators have the belief in there own favorite models they like to use for content creation whether it's anthropic's or google's or any number of other models and the best part about using openrouter here is they constantly keep a rotating roster of new models and content creating or role-playing models that we could very likely offer by way of simple integration - do you agree with me here or am i missing something?
+4:54 PM
 
-> Purpose: give Opencode everything needed to finish this project, in priority order.
-> Each task = its own branch + PR. The operator (Malachi) supplies any credentials a task needs.
+Reasoned
+You're right on both counts. Let me take them in order.
+The model slug — it's a default, not a hardcode
+In config.py it's openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini"). So gpt-4o-mini is just the fallback default (yes, a stale 2024 one) — your OPENAI_MODEL env var overrides it. So change it freely: set OPENAI_MODEL to whatever OpenRouter slug you want (use the exact slug OpenRouter lists for your gemma-edge / open-weight model). I can also bump the repo default off the 2024 value so it's not misleading.
+One real caveat for this pipeline: the agents emit structured JSON (research findings, SEO, thumbnail spec). Big/strong models nail that; some tiny/free models get sloppy with JSON or instructions → the code has graceful fallbacks, but script quality varies. So test your pick on a real generate before committing. Free + fast is great if the output holds up — just verify it on the actual tasks.
+"Offer model choice as a feature" — yes, strongly agree
+And OpenRouter makes it almost free to build: one OpenAI-compatible API, a constantly-rotating catalog, and switching models is literally passing a different model slug. Creators do have loyalties (Claude's voice, Gemini for ideation, open-weight for cost/speed), so "pick your writer model" is a genuine differentiator + stickiness. You're not missing the big picture.
+Three things to design around (the "what am I missing" part):
+Curate, don't expose the raw 300+. Offer a vetted shortlist you've tested for the script/SEO/JSON tasks. A free model that mangles JSON makes the product look bad, not the model. Quality is the moat.
+Decide who pays for tokens. If users pick pricey models on your OpenRouter key, you eat it. Two clean answers: (a) tier models by plan (free plan → free/cheap models; paid → premium) — ties straight into the T6/T7 plan+quota you built; or (b) BYOK — let users paste their own OpenRouter key, so they pay model costs and you charge for the workflow. BYOK basically removes your cost risk; tiering is the upsell lever. You can do both.
+Be deliberate about roleplay/uncensored models — OpenRouter lists NSFW-leaning ones; curating which "creative" models you surface keeps the brand clean.
+Implementation is small: the agents already read the model from config — make it a per-request model field (+ a dropdown in the studio, optionally a per-user default), and you've got a model picker. Plan-gating/BYOK layer on top.
+Want me to (a) bump the repo default model now, (b) build the model picker (per-request + studio dropdown, with a curated list and optional BYOK/plan-gating), and/or (c) drop it into the roadmap/HANDOFF as a Phase 6 feature?
 
----
 
-## 0. Ground rules for Opencode
-- **Repo:** `amemecometru/Logiclemonai-yt` (stable id **1262386010**, default branch `main`). If a push by name 307-redirects, use the id endpoint `/repositories/1262386010/...`.
-- **Apply changes exactly as specified.** Don't re-architect untouched files. The Glazier frontend, the agents, and `client.js`-style engines are intentional — extend, don't rewrite.
-- **One PR per task** (suggested branch names below). Keep diffs scoped.
-- **Secrets never get committed.** App secrets → `.env`; worker secrets → `wrangler secret put`. Add `.gitignore` entries (see T2).
-- **Workers are fail-closed:** they 500 unless `API_TOKEN` is set; the app must send a matching token.
-- **`wrangler dev` crashes locally on ChromeOS/Crostini** — use `wrangler deploy` (or `--remote`).
 
-## 1. Architecture (what exists)
-```
-FastAPI app (app/)
-  agents/         research, script_writer, youtube_seo, thumbnail  (+ writer = legacy)
-  core/           yt_pipeline (studio pipeline)   orchestrator (legacy content pipeline)
-  services/       database_service (D1 over HTTP)  youtube_service (Google API, desktop OAuth)
-  dashboard.py    /api/v1/yt/* router  (create/tasks/plan/batch/videos/export + x/config + x/post)
-  main.py         app, mounts /dashboard static, includes router
-  config.py       pydantic settings (.env)
-  static/index.html   Glazier studio (served at /dashboard)
-Cloudflare Workers (workers/)
-  logiclemonai-db   D1 CRUD (content_* + yt_videos)
-  research-worker   DuckDuckGo scrape
-  x-worker          X (Twitter) OAuth2 PKCE + POST /x/post
-```
 
-## 2. Current state
-**Merged to `main`:**
-- Glazier UI restyle; non-blocking `POST /api/v1/yt/create` (FastAPI background task) + poll `GET /api/v1/yt/tasks/{id}`; D1 persistence (`yt_videos` table, migration `0002`) so generated scripts survive a restart; **Library** tab.
-- Security/robustness: fail-closed worker auth, CORS fixed (`*`+credentials removed), UUID task ids, bounded in-memory task store, working `/export`.
-- X integration: `workers/x-worker` (OAuth2 PKCE connect + `/x/post`), FastAPI proxy `/api/v1/yt/x/{config,post}` (worker token stays server-side), frontend 𝕏 connect chip + **editable thread composer**.
+Build the model picker: a per-request model field + a curated dropdown in the studio, agents honor it, with plan-gating + optional BYOK. Plan it (and which curated models) then build + push.
+4:56 PM
+you had better write a strict handooff if you think that will save how much im spending on your work bc it's very close to me having to really watch the meter tightly
+4:58 PM
 
-**Open PR:** #4 — X thread composer. **→ merge it first (T1).**
+Reasoned
+Model Picker — Strict Build Handoff (Phase 6)
+Here is the self-contained spec. It assumes only the repo at amemecometru/Logiclemonai-yt (main = f1c2fe9) and no memory of our conversation. Hand it to Opencode as-is. Text only — nothing built or pushed.
+0. Goal (one sentence)
+Let each request pick which LLM runs the agents, from a curated dropdown in the studio, gated by the caller's plan, with an optional "bring your own OpenRouter key" (BYOK) that unlocks the full curated list.
+1. Why / current state
+Every agent reads one model from config (OPENAI_MODEL, default gpt-4o-mini in app/config.py). That default is stale and hard-feeling. Env overrides it, but there is no per-request choice.
+The app talks to OpenRouter (OpenAI-compatible): OPENAI_API_KEY = sk-or-..., OPENAI_BASE_URL=https://openrouter.ai/api/v1. So any OpenRouter slug is reachable.
+Agents build the client once in app/agents/base_agent.py (self.client = openai.AsyncOpenAI(**client_kwargs) at __init__) and call self.client.chat.completions.create(...).
+The pipeline (app/core/yt_pipeline.py → create_video_content(...)) builds a per-agent input_data dict and runs research → script → seo → thumbnail.
+2. Single source of truth — the model registry
+Create app/model_registry.py:
+# Tier order: lower index = lower plan requirement
+PLAN_ORDER = {"free": 0, "pro": 1}
 
-## 3. Credentials & environment (full inventory)
-### App `.env`
-| Var | Need | Notes |
-|---|---|---|
-| `OPENAI_API_KEY` | **required** | OpenAI or OpenRouter key (all agents) |
-| `OPENAI_MODEL` | rec | default `gpt-4o-mini`; OpenRouter slug if applicable |
-| `OPENAI_BASE_URL` | if OpenRouter | `https://openrouter.ai/api/v1` |
-| `HTTP_REFERER`, `X_TITLE` | optional | OpenRouter attribution headers (`X_TITLE` ≠ Twitter) |
-| `CLOUDFLARE_DB_URL` | persistence | db-worker URL |
-| `CLOUDFLARE_RESEARCH_URL` | research | research-worker URL |
-| `CLOUDFLARE_API_TOKEN` | if workers | **shared invented string** = db+research worker `API_TOKEN`. NOT a real Cloudflare token. |
-| `CORS_ALLOW_ORIGINS` | optional | default `*`; lock down in prod |
-| `X_WORKER_URL` | X feature | x-worker base URL |
-| `X_WORKER_TOKEN` | X feature | = x-worker `API_TOKEN` |
-| `LOGICLEMONAI_YT_API_KEY` | YT research | YouTube Data v3 **API key** (public read) — wired in T3 (rename to `YOUTUBE_API_KEY` or read both) |
-| `YT_OAUTH_CLIENT_ID` / `YT_OAUTH_CLIENT_SECRET` | YT OAuth | desktop client creds — used by T2 |
-| `YT_TOKEN_FILE` | YT OAuth | token cache path (default `yt_token.pickle`) |
+# Curated, vetted-for-JSON models. Slugs are OpenRouter slugs.
+# VERIFY each slug + price against https://openrouter.ai/models before shipping;
+# OpenRouter rotates availability. Keep this list SMALL and reliable.
+MODELS = [
+    # id (OpenRouter slug)                       label                       min_plan  notes
+    {"id": "google/gemini-2.0-flash-001",        "label": "Gemini 2.0 Flash","min_plan": "free", "default_for": ["free"]},
+    {"id": "meta-llama/llama-3.3-70b-instruct",  "label": "Llama 3.3 70B",   "min_plan": "free"},
+    {"id": "deepseek/deepseek-chat",             "label": "DeepSeek V3",     "min_plan": "free"},
+    {"id": "openai/gpt-4o-mini",                 "label": "GPT-4o mini",     "min_plan": "pro", "default_for": ["pro"]},
+    {"id": "openai/gpt-4o",                      "label": "GPT-4o",          "min_plan": "pro"},
+    {"id": "anthropic/claude-3.7-sonnet",        "label": "Claude 3.7 Sonnet","min_plan": "pro"},
+]
 
-### Worker secrets (`wrangler secret put`)
-- **logiclemonai-db**, **research-worker**: `API_TOKEN` (same value as app `CLOUDFLARE_API_TOKEN`).
-- **x-worker**: `X_CLIENT_ID`, `X_CLIENT_SECRET`, `API_TOKEN` (= app `X_WORKER_TOKEN`); KV namespace `X_KV`; vars `X_REDIRECT_URI`, `X_SCOPES`.
-- **Wrangler auth** for deploys = `wrangler login` (separate from everything above).
+DEFAULT_MODEL = "google/gemini-2.0-flash-001"  # also set config default to this
 
-## 4. Deploy/ops checklist (lights up what's already built)
-1. `wrangler d1 migrations apply <db>` (applies `0002_yt_videos`).
-2. `wrangler secret put API_TOKEN` on db + research workers (shared value).
-3. Deploy **x-worker**: `wrangler kv namespace create X_KV` → id into `wrangler.toml`; `wrangler secret put X_CLIENT_ID|X_CLIENT_SECRET|API_TOKEN`; set `X_REDIRECT_URI` = `<worker-url>/x/callback`; `wrangler deploy`; register that callback in the X app.
-4. App `.env`: set `CLOUDFLARE_DB_URL`, `CLOUDFLARE_RESEARCH_URL`, `CLOUDFLARE_API_TOKEN`, `X_WORKER_URL`, `X_WORKER_TOKEN`.
-5. Smoke test: generate a script → restart API → confirm it's still in **Library**; connect X → post a thread.
+def model_ids() -> set[str]:
+    return {m["id"] for m in MODELS}
 
----
+def default_for_plan(plan: str) -> str:
+    for m in MODELS:
+        if plan in m.get("default_for", []):
+            return m["id"]
+    return DEFAULT_MODEL
 
-## 5. ROADMAP (ordered; each item is a PR)
+def is_allowed(model_id: str, plan: str, byok: bool) -> bool:
+    m = next((x for x in MODELS if x["id"] == model_id), None)
+    if m is None:
+        return False                      # whitelist only — never pass arbitrary slugs
+    if byok:
+        return True                       # BYOK unlocks every curated tier
+    return PLAN_ORDER.get(plan, 0) >= PLAN_ORDER.get(m["min_plan"], 99)
+Rules to enforce verbatim:
+Whitelist only. A requested slug not in MODELS → reject (prevents broken-JSON or NSFW/uncensored slugs leaking in). Roleplay/NSFW-tuned models stay OUT of this list for brand safety; add a separate "advanced" group later if ever wanted.
+BYOK unlocks all curated tiers but still must be IN the registry.
+3. Config default (kill the stale slug)
+app/config.py: change the default only (env still overrides):
+openai_model: str = os.getenv("OPENAI_MODEL", "google/gemini-2.0-flash-001")
+4. Request plumbing
+app/dashboard.py — locate the Pydantic request model bound to POST /api/v1/yt/create (and the batch/plan bodies). Add two optional fields to each:
+model: Optional[str] = None      # OpenRouter slug from the registry
+byok_key: Optional[str] = None   # user-supplied sk-or-... (never logged, never persisted)
+In each handler, before dispatching the background task, resolve + validate:
+plan = "free"
+# if auth is on, resolve the caller's plan from the subscription:
+#   user = _db.get_or_create_user(email); sub = _db.get_subscription(user["id"]); plan = sub.get("plan","free")
+byok = bool(req.byok_key)
+chosen = req.model or default_for_plan(plan)
+if not is_allowed(chosen, plan, byok):
+    raise HTTPException(status_code=403, detail=f"Model '{chosen}' not allowed on plan '{plan}'. Upgrade or use your own key.")
+Pass chosen and req.byok_key into pipeline.create_video_content(..., model=chosen, byok_key=req.byok_key). Add those two params (default None) to create_video_content's signature.
+5. Pipeline → agents (lowest-touch path)
+In app/core/yt_pipeline.py, when building each agent's input_data dict, inject:
+input_data["model"] = model            # the resolved slug
+input_data["byok_key"] = byok_key      # may be None
+Do this for every agent call (research, script, seo, thumbnail) so the choice is uniform.
+6. Agents honor it — app/agents/base_agent.py
+Find the single place that calls self.client.chat.completions.create(...). Make model + key per-call:
+def _client_for(self, byok_key: str | None):
+    if not byok_key:
+        return self.client
+    kwargs = {"api_key": byok_key}
+    base = self.config.get("openai_base_url")
+    if base: kwargs["base_url"] = base
+    # reuse the same default_headers you already set for OpenRouter attribution
+    return openai.AsyncOpenAI(**kwargs)
 
-### Phase 1 — finish what's started
-**T1 · Merge PR #4** (X composer).
+# at the call site, read overrides out of input_data (thread them into the helper):
+model = (input_data or {}).get("model") or self.config["model"]
+client = self._client_for((input_data or {}).get("byok_key"))
+resp = await client.chat.completions.create(model=model, ...)
+If execute() doesn't already receive input_data at the call site, pass it through. Do NOT construct a new client per token — only when BYOK is present. Never log byok_key.
+7. New endpoint — GET /api/v1/yt/models
+Returns the curated list plus which are usable now, so the UI can disable locked options:
+@router.get("/models")
+async def list_models():
+    plan = "free"  # resolve from auth when require_api_key is on
+    return {
+        "plan": plan,
+        "default": default_for_plan(plan),
+        "models": [
+            {"id": m["id"], "label": m["label"], "min_plan": m["min_plan"],
+             "allowed": is_allowed(m["id"], plan, byok=False)}
+            for m in MODELS
+        ],
+    }
+8. Studio UI — app/static/index.html
+Add a labeled <select id="model-select"> near the topic/generate controls. On load, fetch('${API}/models'), populate options; show locked ones disabled with a "Pro" suffix; preselect default.
+Add an optional collapsible "Use my own OpenRouter key" <input id="byok-key" type="password" placeholder="sk-or-..."> with a one-line note: "Stored only for this request; never saved." When filled, enable all options client-side.
+In the create/batch/plan POST bodies, include model: select.value and, if present, byok_key: byokInput.value.
+Match the existing Glazier styling (silver pill / glass select). API='/api/v1/yt' already exists.
+9. Acceptance criteria
+GET /api/v1/yt/models returns the curated list with correct allowed flags.
+POST /create with no model → uses plan default; with a registry slug allowed for the plan → runs on that model; with a locked slug and no BYOK → 403; with the same locked slug + valid byok_key → runs.
+Unknown/arbitrary slug → 403 regardless of BYOK.
+byok_key never appears in logs, task records, or D1.
+Existing tests still pass; add one unit test for is_allowed (free vs pro vs byok) and one for the 403 path.
+Push as a PR titled "Phase 6: per-request model picker + plan gating + BYOK"; follow the repo's existing push convention.
+Remaining work still open (so nothing is lost — not part of this PR)
+Deploy to green (you, in Railway): set OPENAI_API_KEY = your sk-or-..., set OPENAI_MODEL to a registry slug, redeploy. The boot crash is solely the missing key.
+Apply commerce migration: git pull then npx wrangler d1 migrations apply logiclemonai-db --remote (this lands 0003 users/api_keys/subscriptions/usage — required before keys/Stripe).
+Point the domain: Railway custom domain yt.logiclemonai.com → Cloudflare CNAME (grey-cloud first).
+T8 Stripe — BLOCKED on your Stripe TEST secret + price IDs + webhook secret.
+Phase 5 SaaS shell (landing + OAuth login/sessions + per-user dashboard) and x-worker deploy — later.
+A couple of judgment calls I locked in so Opencode doesn't have to guess: whitelist-only (no arbitrary slugs even with BYOK), NSFW/roleplay models excluded from the curated list, and the free-plan default set to Gemini 2.0 Flash. Say the word if you'd rather flip any of those.
 
-**T2 · YouTube Data v3 OAuth** — branch `yt-oauth-env`. Creds: operator's desktop `YT_OAUTH_CLIENT_ID`/`SECRET`.
-- Google side (operator): enable **YouTube Data API v3**; OAuth consent screen (External) with the 4 scopes `youtube.upload`, `youtube`, `youtubepartner`, `youtube.force-ssl`; add operator as **Test user**.
-- Code: patch `app/services/youtube_service.py` `_authenticate()` to build the flow via `InstalledAppFlow.from_client_config({...installed...}, SCOPES)` reading `YT_OAUTH_CLIENT_ID`/`YT_OAUTH_CLIENT_SECRET` from settings, **keeping the `from_client_secrets_file` path as fallback**. Add `config.py` settings.
-- Add `.gitignore`: `.env`, `client_secret.json`, `yt_token.pickle`, `__pycache__/`, `*.pyc`.
-- Done when: first run opens browser consent locally and caches `yt_token.pickle`; subsequent runs auth silently.
 
-**T3 · Real YouTube research** — branch `yt-research`. Creds: `LOGICLEMONAI_YT_API_KEY`.
-- In `app/agents/research_agent.py`, add a YouTube Data v3 `search.list` + `videos.list` step (httpx, API-key) that pulls top videos (title, channel, views, publishedAt) for the topic and merges into `research_data` (`sources`, `key_findings`, a new `youtube_competitors` field).
-- `config.py`: `youtube_api_key` (read `YOUTUBE_API_KEY` or `LOGICLEMONAI_YT_API_KEY`). No-op gracefully if unset.
-- Done when: a generated script's research reflects real ranking videos when the key is set.
 
-### Phase 2 — make the OUTPUT real (today it ships briefs, not assets)
-**T4 · Thumbnail image generation** — branch `thumbnail-image`. Creds: an image-model key (operator picks OpenAI Images / Gemini / Stability).
-- After `thumbnail_agent` produces `ai_generation_prompt`, call the image API to render a real **1280×720** thumbnail; store it (Cloudflare **R2** or return a data/URL) and add `thumbnail_url` to the pipeline result + Library + the result card.
-- Done when: each generated video has a viewable thumbnail image, not just a prompt.
 
-**T5 · Channel analytics (OAuth)** — branch `yt-analytics`. Uses T2 creds.
-- `GET /api/v1/yt/channel` → `youtube_service.get_channel_stats()` + recent videos; add a **Channel** tab/card in the studio.
-- Done when: the connected channel's subs/views/recent videos render.
 
-### Phase 3 — commercial foundation (monetization) — the real gate to "product"
-**T6 · D1 schema** — branch `commerce-schema`. Migration `0003`: `users`, `api_keys`, `subscriptions`, `usage` (see acceptance below). Add db-worker routes for each (mirror existing CRUD).
 
-**T7 · Auth + real API keys** — branch `auth-apikeys`.
-- Replace the **client-side fake** `generateApiKey()` with server-issued keys: `POST /api/v1/keys` (create, returns once, store hash), `GET /api/v1/keys`, `DELETE /api/v1/keys/{id}`; validate on every `/api/v1/yt/*` call via middleware/dependency; enforce per-key monthly quota from `usage`.
-- Minimal user identity: email+password (hashed) or reuse the X/Google OAuth. Sessions or signed tokens.
-- Done when: requests without a valid key are 401; the studio's API-key panel shows real keys.
 
-**T8 · Stripe (TEST keys first)** — branch `billing-stripe`. Creds: Stripe **test** secret + price ids + webhook secret.
-- `POST /api/v1/billing/checkout` → Stripe Checkout Session for Monthly ($10) / Annual ($50); `POST /api/v1/billing/webhook` → set `subscriptions.status`; gate features + quota by plan. Wire the existing Pricing "Subscribe" buttons (replace the stub modal) to real checkout.
-- Done when: test-card checkout flips a user to active and unlocks the plan; the stub alert is gone.
+Suggested follow-ups
 
-### Phase 4 — hardening & cleanup
-- **T9 · Research robustness** (`research-worker`): the DuckDuckGo-Lite scrape is brittle and rate-limited — add KV caching + a fallback source (T3's YouTube data helps); handle non-200s.
-- **T10 · Concurrency**: FastAPI `BackgroundTasks` is fine at low volume; move to a durable queue (Cloudflare Queues / Celery+Redis) before scaling.
-- **T11 · Dead code**: `app/scheduler.py` is never started and the legacy content pipeline (`orchestrator.py` + `writer_agent.py`) is unused by the studio — wire intentionally or remove.
-- **T12 · Tests & docs**: make `tests/` pass against the new endpoints; refresh `README.md` (drop the stale `TAVILY_API_KEY` mention; document the X + YouTube flows, the env table, and the deploy checklist).
 
----
+Commit this spec to HANDOFF.md
 
-## 6. Acceptance criteria (key items)
-- **T6 schema (D1):**
-  - `users(id, email, password_hash?, oauth_provider?, oauth_sub?, plan, created_at)`
-  - `api_keys(id, user_id, name, key_hash, prefix, last_used_at, revoked, created_at)`
-  - `subscriptions(id, user_id, stripe_customer_id, stripe_sub_id, plan, status, current_period_end)`
-  - `usage(id, user_id, period, units, updated_at)`
-- **Security:** no endpoint that performs work or spends LLM/API budget is reachable without a valid key/session once T7 lands. Stripe keys are **test** until launch.
-- **Quotas:** monthly unit cap per plan enforced from `usage`; 402/429 when exceeded.
+Build the model picker PR yourself
 
-## 7. Known constraints / gotchas
-- Desktop YouTube OAuth = **local only** (needs a browser); Testing-mode sensitive scopes → **refresh token expires ~7 days** until the OAuth app is Published/verified.
-- YouTube Data v3 quota: **10,000 units/day** (search ≈ 100, upload ≈ 1,600).
-- `Response.redirect()` in Workers needs an **absolute** URL.
-- Stripe account is currently **LIVE** keys — create/use **TEST** keys for all dev (T8).
-- Don't commit `.env`, `client_secret.json`, `yt_token.pickle` (T2 adds `.gitignore`).
+Just give me the deploy steps
+Scroll to bottom
+45 assets
+
+IMPLEMENTATION_HANDOFF.md
+landing-and-oauth.png

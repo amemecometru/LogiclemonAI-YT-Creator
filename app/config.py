@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     cors_allow_origins: str = os.getenv("CORS_ALLOW_ORIGINS", "*")
 
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    openai_model: str = os.getenv("OPENAI_MODEL", "google/gemma-4-26b-a4b-it")
     openai_base_url: Optional[str] = os.getenv("OPENAI_BASE_URL", None)
 
     http_referer: str = os.getenv("HTTP_REFERER", "")

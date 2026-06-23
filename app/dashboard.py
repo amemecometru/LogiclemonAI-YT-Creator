@@ -11,6 +11,7 @@ from app.models.content import ContentStatus
 from app.config import settings
 from app.services.youtube_service import YouTubeService
 from app.auth import require_api_key, generate_api_key
+from app.model_registry import is_allowed, default_for_plan, MODELS
 
 
 router = APIRouter(prefix="/api/v1/yt", tags=["youtube"])
@@ -23,6 +24,8 @@ class CreateVideoRequest(BaseModel):
     video_length: str = "medium"
     tone: str = "professional"
     niche: str = "general"
+    model: Optional[str] = None
+    byok_key: Optional[str] = None
 
 
 class XPostRequest(BaseModel):
@@ -37,8 +40,12 @@ class ApiKeyRequest(BaseModel):
 
 @router.post("/create")
 async def create_video(request: CreateVideoRequest, background_tasks: BackgroundTasks, _auth=Depends(require_api_key)):
-    # Non-blocking: register the task, run the pipeline in the background, return the id immediately.
-    # Clients poll GET /tasks/{task_id} until status is "completed" (the result is included there).
+    plan = "free"
+    byok = bool(request.byok_key)
+    chosen = request.model or default_for_plan(plan)
+    if not is_allowed(chosen, plan, byok):
+        raise HTTPException(status_code=403, detail=f"Model '{chosen}' not allowed on plan '{plan}'. Upgrade or use your own key.")
+
     task_id = pipeline.register_task()
     background_tasks.add_task(
         pipeline.create_video_content,
@@ -48,6 +55,8 @@ async def create_video(request: CreateVideoRequest, background_tasks: Background
         tone=request.tone,
         niche=request.niche,
         task_id=task_id,
+        model=chosen,
+        byok_key=request.byok_key,
     )
     return {"task_id": task_id, "status": "processing"}
 
@@ -253,3 +262,17 @@ async def revoke_key(key_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="Key not found.")
     return {"id": key_id, "revoked": True}
+
+
+@router.get("/models")
+async def list_models():
+    plan = "free"
+    return {
+        "plan": plan,
+        "default": default_for_plan(plan),
+        "models": [
+            {"id": m["id"], "label": m["label"], "min_plan": m["min_plan"],
+             "allowed": is_allowed(m["id"], plan, byok=False)}
+            for m in MODELS
+        ],
+    }

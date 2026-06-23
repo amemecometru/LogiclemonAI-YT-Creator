@@ -1,0 +1,33 @@
+name = "tg"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+account_id = "8a460817bc554362e040644c8e003fb9"
+
+# D1 for task state + user history
+[[d1_databases]]
+binding = "DB"
+database_name = "logiclemonai-db"
+database_id = "49e1e775-6d6d-4735-89ea-487da5cf2e33"
+
+# R2 for thumbnails — enable at cloudflare.com/r2 then uncomment:
+# [[r2_buckets]]
+# binding = "R2"
+# bucket_name = "logiclemonai-tg"
+
+[[kv_namespaces]]
+binding = "TASKS"
+id = "ba826c0ef6b24a8cba5d68270905ec64"
+
+[vars]
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+# Deploy the other workers first, then replace the URLs below:
+RESEARCH_WORKER_URL = "https://logiclemonai-research.logiclemonai.workers.dev"
+DB_WORKER_URL = "https://logiclemonai-db.logiclemonai.workers.dev"
+
+# Secrets (wrangler secret put):
+# BOT_TOKEN              — from @BotFather
+# OPENROUTER_API_KEY     — sk-or-... (from openrouter.ai/keys)
+# RESEARCH_TOKEN         — API_TOKEN secret from research-worker
+# DB_TOKEN               — API_TOKEN secret from db-worker
+# OPENAI_API_KEY         - API_KEY from OpenAI
+# BFL_API_KEY            - API_KEY from Black Forest Labs

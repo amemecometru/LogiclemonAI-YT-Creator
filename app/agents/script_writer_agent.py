@@ -24,13 +24,16 @@ class ScriptWriterAgent(BaseAgent):
             target_audience = input_data.get("target_audience", "general audience")
             video_length = input_data.get("video_length", VideoLength.MEDIUM)
             tone = input_data.get("tone", "professional")
+            model = input_data.get("model")
+            byok_key = input_data.get("byok_key")
             target_duration = self._get_target_duration(video_length)
 
-            title = await self._generate_title(topic, research_data, target_audience)
-            hook = await self._generate_hook(topic, target_audience)
-            sections = await self._generate_sections(topic, research_data, target_duration, target_audience, tone)
-            conclusion = await self._generate_conclusion(topic, sections)
-            call_to_action = await self._generate_cta(topic, target_audience)
+            elements = await self._generate_all_elements(topic, research_data, target_audience, model=model, byok_key=byok_key)
+            title = elements.get("title", topic)
+            hook = elements.get("hook", "")
+            conclusion = elements.get("conclusion", "")
+            call_to_action = elements.get("call_to_action", "")
+            sections = await self._generate_sections(topic, research_data, target_duration, target_audience, tone, model=model, byok_key=byok_key)
 
             full_script_parts = [f"# {title}\n"]
             full_script_parts.append(f"## Hook\n{hook}\n")
@@ -84,52 +87,52 @@ class ScriptWriterAgent(BaseAgent):
         mapping = {VideoLength.SHORT: 60, VideoLength.MEDIUM: 480, VideoLength.LONG: 1200}
         return mapping.get(video_length, 480)
 
-    async def _generate_title(self, topic: str, research_data: Dict[str, Any], audience: str) -> str:
+    async def _generate_all_elements(self, topic: str, research_data: Dict[str, Any], audience: str, model: str | None = None, byok_key: str | None = None) -> Dict[str, str]:
         findings = research_data.get("key_findings", [])
         findings_text = "\n".join(f"- {f}" for f in findings[:3])
 
-        prompt = f"""Generate a compelling YouTube video title about "{topic}" for {audience}.
+        prompt = f"""Generate the title, hook, conclusion, and call-to-action for a YouTube video about "{topic}" for {audience}.
 
 Research context:
 {findings_text}
 
 Requirements:
-- 30-60 characters
-- Clickable and curiosity-driven
-- Include a key benefit or surprising fact
-- Use power words
-- SEO-friendly
+- Title: 30-60 characters, clickable, SEO-friendly, power words
+- Hook: 30-40 words, starts with a pattern interrupt (question or bold statement), creates curiosity gap
+- Conclusion: ~60 words, summarizes key takeaway, reinforces the main message
+- Call-to-action: ~50 words, ask for like/subscribe/comment, mention next video topic
 
-Return ONLY the title string, no quotes, no explanation."""
-
-        messages = [{"role": "user", "content": prompt}]
-        try:
-            response = await self.call_openai(messages, max_tokens=100, temperature=0.8)
-            return response.strip().strip('"\'')
-        except Exception as e:
-            fallback = f"The Truth About {topic}"
-            return fallback[:60]
-
-    async def _generate_hook(self, topic: str, audience: str) -> str:
-        prompt = f"""Write a powerful 15-30 second video hook about "{topic}" for {audience}.
-
-The hook must:
-- Start with a pattern interrupt (question, bold statement, or surprising fact)
-- Create curiosity gap
-- Make them want to watch the whole video
-- Be spoken in 30-40 words max
-
-Return ONLY the hook text."""
+Return as JSON only:
+{{
+    "title": "...",
+    "hook": "...",
+    "conclusion": "...",
+    "call_to_action": "..."
+}}"""
 
         messages = [{"role": "user", "content": prompt}]
         try:
-            response = await self.call_openai(messages, max_tokens=150, temperature=0.8)
-            return response.strip()
+            response = await self.call_openai(messages, model=model, byok_key=byok_key, max_tokens=500, temperature=0.8)
+            response = response.strip()
+            if response.startswith("```json"):
+                response = response[7:]
+            if response.endswith("```"):
+                response = response[:-3]
+            parsed = json.loads(response.strip())
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM returned non-object JSON")
+            return parsed
         except Exception:
-            return f"Most people don't know this about {topic}, but after watching this video, you'll never look at it the same way again."
+            return {
+                "title": f"The Truth About {topic}"[:60],
+                "hook": f"Most people don't know this about {topic}, but after watching this video, you'll never look at it the same way again.",
+                "conclusion": f"In conclusion, {topic} is something everyone should understand. The key takeaways will help you make better decisions going forward.",
+                "call_to_action": f"If you found this helpful, hit like and subscribe. Comment below what you think about {topic}. Next video we dive even deeper."
+            }
 
     async def _generate_sections(self, topic: str, research_data: Dict[str, Any],
-                                  target_duration: int, audience: str, tone: str) -> List[ScriptSection]:
+                                  target_duration: int, audience: str, tone: str,
+                                  model: str | None = None, byok_key: str | None = None) -> List[ScriptSection]:
         num_sections = max(3, min(6, target_duration // 90))
         sec_duration = target_duration // num_sections
 
@@ -163,7 +166,7 @@ Return ONLY valid JSON array."""
 
         messages = [{"role": "user", "content": prompt}]
         try:
-            response = await self.call_openai(messages, max_tokens=2000, temperature=0.7)
+            response = await self.call_openai(messages, model=model, byok_key=byok_key, max_tokens=2000, temperature=0.7)
             response = response.strip()
             if response.startswith("```json"):
                 response = response[7:]
@@ -172,6 +175,8 @@ Return ONLY valid JSON array."""
             response = response.strip()
 
             raw_sections = json.loads(response)
+            if not isinstance(raw_sections, list):
+                raise ValueError("LLM returned non-list JSON for sections")
             sections = []
             current_time = 0
             for i, rs in enumerate(raw_sections[:num_sections]):
@@ -181,9 +186,9 @@ Return ONLY valid JSON array."""
                 sections.append(ScriptSection(
                     timestamp=timestamp,
                     duration_seconds=sec_duration,
-                    title=rs.get("title", f"Section {i+1}"),
-                    content=rs.get("content", ""),
-                    visual_cue=rs.get("visual_cue")
+                    title=rs.get("title", f"Section {i+1}") if isinstance(rs, dict) else f"Section {i+1}",
+                    content=rs.get("content", "") if isinstance(rs, dict) else "",
+                    visual_cue=rs.get("visual_cue") if isinstance(rs, dict) else None
                 ))
                 current_time += sec_duration
 
@@ -216,35 +221,4 @@ Return ONLY valid JSON array."""
             ))
         return sections
 
-    async def _generate_conclusion(self, topic: str, sections: List[ScriptSection]) -> str:
-        prompt = f"""Write a 30-second conclusion for a YouTube video about "{topic}".
 
-Summarize the key points and reinforce the main takeaway.
-Keep it concise and impactful. ~60 words.
-
-Return ONLY the conclusion text."""
-
-        messages = [{"role": "user", "content": prompt}]
-        try:
-            response = await self.call_openai(messages, max_tokens=200, temperature=0.7)
-            return response.strip()
-        except Exception:
-            return f"In conclusion, {topic} is something everyone should understand. The key takeaways from this video will help you make better decisions going forward."
-
-    async def _generate_cta(self, topic: str, audience: str) -> str:
-        prompt = f"""Write a call to action for a YouTube video about "{topic}" for {audience}.
-
-Include:
-- Ask to like the video
-- Ask to subscribe with a reason
-- Ask to comment (specific question related to {topic})
-- Mention what the next video will be about
-
-Return ONLY the CTA text, ~50 words."""
-
-        messages = [{"role": "user", "content": prompt}]
-        try:
-            response = await self.call_openai(messages, max_tokens=200, temperature=0.7)
-            return response.strip()
-        except Exception:
-            return "If you found this helpful, hit that like button and subscribe for more content like this. Leave a comment below telling me what you think about " + topic + ". And don't miss next week's video where we dive even deeper!"

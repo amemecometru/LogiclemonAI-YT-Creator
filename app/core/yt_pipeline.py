@@ -41,7 +41,8 @@ class YTPipeline:
     async def create_video_content(self, topic: str, target_audience: str = "general audience",
                                     video_length: str = "medium", tone: str = "professional",
                                     niche: str = "general", channel_config: Optional[Dict[str, Any]] = None,
-                                    task_id: Optional[str] = None) -> Dict[str, Any]:
+                                    task_id: Optional[str] = None, export_md: bool = False,
+                                    model: Optional[str] = None, byok_key: Optional[str] = None) -> Dict[str, Any]:
         if task_id is None:
             task_id = self.register_task()
         elif task_id not in self.active_tasks:
@@ -58,7 +59,9 @@ class YTPipeline:
             research_result = await self.research_agent.execute({
                 "topic": topic,
                 "max_results": 10,
-                "search_depth": "advanced"
+                "search_depth": "advanced",
+                "model": model,
+                "byok_key": byok_key,
             })
 
             if research_result["status"] != "success":
@@ -75,7 +78,9 @@ class YTPipeline:
                 "research_data": research_data,
                 "target_audience": target_audience,
                 "video_length": video_length,
-                "tone": tone
+                "tone": tone,
+                "model": model,
+                "byok_key": byok_key,
             })
 
             if script_result["status"] != "success":
@@ -84,33 +89,26 @@ class YTPipeline:
             script = script_result.get("script", {})
             self.active_tasks[task_id]["progress"] = 55
 
-            self.active_tasks[task_id]["current_agent"] = "seo"
+            self.active_tasks[task_id]["current_agent"] = "seo + thumbnail"
             self.active_tasks[task_id]["progress"] = 60
-            seo_result = await self.seo_agent.execute({
-                "topic": topic,
-                "script": script,
-                "research_data": research_data,
-                "target_audience": target_audience,
-                "channel_config": channel_config or {}
+
+            seo_coro = self.seo_agent.execute({
+                "topic": topic, "script": script, "research_data": research_data,
+                "target_audience": target_audience, "channel_config": channel_config or {},
+                "model": model, "byok_key": byok_key,
             })
+            thumb_coro = self.thumbnail_agent.execute({
+                "topic": topic, "title": script.get("title", topic), "script": script,
+                "research_data": research_data, "niche": niche,
+                "model": model, "byok_key": byok_key,
+            })
+            seo_result, thumbnail_result = await asyncio.gather(seo_coro, thumb_coro)
 
             if seo_result["status"] != "success":
                 return self._error_response(task_id, "SEO optimization failed", seo_result.get("message", ""))
 
             metadata = seo_result.get("metadata", {})
             title_variants = seo_result.get("title_variants", [])
-            self.active_tasks[task_id]["progress"] = 80
-
-            self.active_tasks[task_id]["current_agent"] = "thumbnail"
-            self.active_tasks[task_id]["progress"] = 85
-            thumbnail_result = await self.thumbnail_agent.execute({
-                "topic": topic,
-                "title": script.get("title", topic),
-                "script": script,
-                "research_data": research_data,
-                "niche": niche
-            })
-
             thumbnail = thumbnail_result.get("thumbnail", {}) if thumbnail_result["status"] == "success" else None
             self.active_tasks[task_id]["progress"] = 95
 
@@ -137,9 +135,17 @@ class YTPipeline:
 
             self.active_tasks[task_id]["status"] = ContentStatus.COMPLETED
             self.active_tasks[task_id]["progress"] = 100
-            self.active_tasks[task_id]["result"] = result   # retain payload for /tasks/{id} and /export/{id}
-            await self._persist_result(task_id, result)     # persist to D1 so it survives a restart
+            self.active_tasks[task_id]["result"] = result
+            await self._persist_result(task_id, result)
             self._evict_old_tasks()
+
+            if export_md:
+                try:
+                    md_path = await self._export_markdown(result)
+                    result["markdown_path"] = md_path
+                except Exception as md_err:
+                    print(f"[MD export failed] {md_err}")
+                    result["markdown_path"] = None
 
             return result
 
@@ -148,7 +154,8 @@ class YTPipeline:
 
     async def create_batch(self, topics: List[str], target_audience: str = "general audience",
                             video_length: str = "medium", tone: str = "professional",
-                            niche: str = "general") -> List[Dict[str, Any]]:
+                            niche: str = "general",
+                            model: Optional[str] = None, byok_key: Optional[str] = None) -> List[Dict[str, Any]]:
         results = []
         for topic in topics:
             print(f"\nCreating video content for: {topic}")
@@ -157,7 +164,9 @@ class YTPipeline:
                 target_audience=target_audience,
                 video_length=video_length,
                 tone=tone,
-                niche=niche
+                niche=niche,
+                model=model,
+                byok_key=byok_key,
             )
             results.append(result)
             if result["status"] != "success":
@@ -282,6 +291,79 @@ Return ONLY valid JSON."""
             })
         except Exception as e:
             print(f"[YT] persist failed for {task_id}: {e}")
+
+    async def _export_markdown(self, result: Dict[str, Any]) -> str:
+        import os, re
+        script = result.get("script") or {}
+        if not isinstance(script, dict):
+            script = {}
+        meta = result.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        thumb = result.get("thumbnail_design") or {}
+        if not isinstance(thumb, dict):
+            thumb = {}
+        topic = result.get("topic", "video")
+        title = (script.get("title") if isinstance(script, dict) else None) or topic
+
+        lines = [
+            f"# {title}",
+            "",
+            f"**Topic:** {topic}",
+            f"**Niche:** {result.get('niche', 'general')}",
+            f"**Audience:** {result.get('target_audience', 'general')}",
+            f"**Execution time:** {result.get('execution_time', 0):.1f}s",
+            "",
+        ]
+
+        if isinstance(meta, dict) and meta.get("description"):
+            lines += ["## Description", "", meta["description"], ""]
+
+        if isinstance(meta, dict) and meta.get("tags"):
+            lines += ["## Tags", "", ", ".join(meta["tags"]), ""]
+
+        variants = result.get("title_variants", [])
+        if isinstance(variants, list) and variants:
+            lines += ["## Title Variants", ""]
+            for v in variants:
+                headline = v.get("title", "") if isinstance(v, dict) else str(v)
+                score = v.get("appeal_score", "N/A") if isinstance(v, dict) else "N/A"
+                lines += [f"- {headline} (appeal: {score})"]
+            lines += [""]
+
+        sections = script.get("sections", []) if isinstance(script, dict) and isinstance(script.get("sections"), list) else []
+        if sections:
+            lines += ["## Script", ""]
+            for s in sections:
+                lines += [f"### {s.get('heading', 'Section')}", "", s.get("content", ""), ""]
+
+        if isinstance(script, dict):
+            if script.get("hook"):
+                lines += ["## Hook", "", script["hook"], ""]
+            if script.get("conclusion"):
+                lines += ["## Conclusion", "", script["conclusion"], ""]
+            if script.get("cta"):
+                lines += ["## Call to Action", "", script["cta"], ""]
+
+        if isinstance(thumb, dict) and thumb.get("concept_description"):
+            lines += ["## Thumbnail Design", ""]
+            lines += [f"- **Concept:** {thumb['concept_description']}"]
+            lines += [f"- **Composition:** {thumb.get('composition_guide', '')}"]
+            lines += [f"- **Text overlay:** {thumb.get('text_overlay', '')}"]
+            lines += [f"- **Color scheme:** {', '.join(thumb.get('color_scheme', []))}"]
+            if thumb.get("thumbnail_url"):
+                lines += [f"- **Image:** {thumb['thumbnail_url']}"]
+            lines += [""]
+
+        out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output")
+        os.makedirs(out_dir, exist_ok=True)
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', title.strip())[:60]
+        md_path = os.path.join(out_dir, f"{safe_name}.md")
+
+        with open(md_path, "w") as f:
+            f.write("\n".join(lines))
+
+        return md_path
 
     async def cancel_task(self, task_id: str) -> Dict[str, Any]:
         if task_id not in self.active_tasks:
