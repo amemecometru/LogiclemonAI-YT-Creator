@@ -141,6 +141,18 @@ sample-code-*
 .DS_Store
 Thumbs.db
 
+# Workers
+workers/*/.wrangler/
+workers/*/.env
+worker/**/.wrangler/
+worker/**/.env
+
+# Opencode handoff docs
+**/opencode-handoff.md
+
+# Output
+output/
+
 # --- secrets & local (added by handoff review) ---
 .env.*
 !.env.example
