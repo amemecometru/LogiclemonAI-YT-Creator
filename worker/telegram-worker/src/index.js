@@ -46,9 +46,9 @@ export default {
       return new Response('Asset not compiled or R2 unlinked', { status: 404 });
     }
 
-    // ── PIPELINE ROUTE A: PIPELINE KICKOFF ──
+    // ── PIPELINE ROUTE A: PIPELINE KICKOFF WITH ARBITRAGE ARRAYS ──
     if (path === '/api/pipeline/start' && request.method === 'POST') {
-      const { topic, lang = 'en', tier = 'standard', audience = 'general', tg_user = 'anon' } = await request.json();
+      const { topic, lang = 'en', tier = 'standard', audience = 'general', tg_user = 'anon', locale = 'en' } = await request.json();
       if (!topic) return cors({ error: 'Creation topic required to start pipeline' }, 400);
 
       const taskId = crypto.randomUUID();
@@ -59,15 +59,14 @@ export default {
         tier,
         audience,
         tg_user,
+        locale, // Passed to pipeline.js to authorize automatic regional pricing downgrades
         step: 0,
         status: 'processing',
         created_at: Date.now()
       };
 
-      // Write initial state to KV tracking
       await env.TASKS.put('task:status:' + taskId, JSON.stringify(task), { expirationTtl: 86400 });
 
-      // Fire asynchronous background self-fetch step execution
       ctx.waitUntil(
         fetch(`https://${url.host}/api/pipeline/step`, {
           method: 'POST',
@@ -90,11 +89,9 @@ export default {
 
       try {
         task.status = 'processing';
-        // Run single segmented pipeline computation phase
         task = await pipelineStep(task, step, env);
         await env.TASKS.put('task:status:' + taskId, JSON.stringify(task), { expirationTtl: 86400 });
 
-        // Trigger next sequential self-fetch if step is below closure boundaries
         if (task.status !== 'error' && step < 7) {
           ctx.waitUntil(
             fetch(`https://${url.host}/api/pipeline/step`, {
@@ -152,7 +149,7 @@ export default {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
             code,
-            client_id: env.GOOGLE_CLIENT_ID,
+            client_id: {env: env.GOOGLE_CLIENT_ID},
             client_secret: env.GOOGLE_CLIENT_SECRET,
             redirect_uri: redirectUri,
             grant_type: 'authorization_code',
@@ -456,7 +453,6 @@ function getMiniAppHtml(env) {
   .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:3000; padding:10px 16px; border-radius:var(--r-md); font-family:var(--font-mono); font-size:11px; color:var(--teal); background:var(--glazier-glass-2); border:1px solid var(--teal-soft);}
   .footer{padding:20px 0; text-align:center; font-family:var(--font-mono); font-size:9px; color:var(--ink-on-dark-dim); border-top: 1px solid rgba(255,255,255,0.03); margin-top: 15px;}
 
-  /* ── REAL-TIME PIPELINE PROGRESS BAR COMPONENT STYLES ── */
   .progress-box { margin-top: 15px; padding: 14px; background: rgba(0,0,0,0.45); border: 1px solid var(--line-dark); border-radius: var(--r-md); }
   .progress-header { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--teal); margin-bottom: 8px; font-weight: bold;}
   .progress-bar-bg { width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
@@ -468,6 +464,15 @@ function getMiniAppHtml(env) {
   .step-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-on-dark-dim); }
   .step-item.active .step-dot { background: var(--teal); box-shadow: 0 0 8px var(--teal); }
   .step-item.completed .step-dot { background: var(--teal-bright); }
+
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; margin-bottom: 15px; }
+  .preset-card { background: rgba(255,255,255,0.02); border: 1px solid var(--line-dark); border-radius: var(--r-md); padding: 10px; cursor: pointer; transition: all var(--t-base) var(--ease); text-align: left; position: relative; }
+  .preset-card:hover { background: rgba(63,224,208,0.06); border-color: var(--teal); transform: translateY(-1px); }
+  .preset-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-family: var(--font-mono); background: var(--teal-faint); color: var(--teal-bright); padding: 1px 4px; border-radius: 3px; font-weight: bold; border: 1px solid var(--teal-soft); }
+  .preset-title { font-size: 12px; font-weight: bold; color: var(--ink-on-dark); margin-bottom: 4px; padding-right: 22px; }
+  .preset-desc { font-size: 10px; color: var(--ink-on-dark-dim); line-height: 1.3; }
+  .premium-banner { background: linear-gradient(90deg, rgba(246,169,59,0.15), rgba(63,224,208,0.15)); border: 1px solid var(--amber); padding: 10px; border-radius: var(--r-md); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+  .premium-banner-text { font-family: var(--font-mono); font-size: 10px; color: var(--amber); font-weight: bold; }
   </style>
 </head>
 <body>
@@ -481,7 +486,6 @@ function getMiniAppHtml(env) {
       </div>
     </div>
 
-    <!-- ── INTERFACE COMPONENT A: ONBOARDING & LANDING PAGE ── -->
     <div class="wrap" id="landing-portal">
       <header class="brand-hero">
         <h1 class="logo">Logiclemon<em>AI</em></h1>
@@ -535,7 +539,6 @@ function getMiniAppHtml(env) {
       </div>
     </div>
 
-    <!-- ── INTERFACE COMPONENT B: MAIN CREATION WORKSPACE ── -->
     <div class="wrap" id="studio-workspace" style="display: none; opacity: 0; transition: opacity var(--t-base) var(--ease);">
       <header class="brand-hero">
         <h1 class="logo">Logiclemon<em>AI</em></h1>
@@ -565,20 +568,51 @@ function getMiniAppHtml(env) {
 
         <div id="tab-images" class="tab-content">
           <div class="card glz-surface-glass">
+            <div class="premium-banner">
+              <span class="premium-banner-text">⭐ GOOGLE IMAGEN 3 ACTIVE PORT</span>
+              <span style="font-family: var(--font-mono); font-size: 8px; background: rgba(255,255,255,0.1); color: #fff; padding: 2px 5px; border-radius: 4px;">PREMIUM</span>
+            </div>
             <h2>Direct Neural Image Generator</h2>
             <div class="form-group">
               <label>Visual Engine Provider</label>
               <select id="image-model" class="glz-field">
+                <option value="google/imagen-3" selected>Google Cloud — Imagen 3 Premium (Photorealistic Clarity)</option>
                 <option value="bfl/flux-2-pro-preview">Black Forest Labs — FLUX.2 Pro (Ultra Text & Detail)</option>
                 <option value="bfl/flux-pro-1.1">Black Forest Labs — FLUX 1.1 Pro (High-Speed Realism)</option>
-                <option value="google/imagen-3">Google Cloud — Imagen 3 Premium (Photorealistic Clarity)</option>
                 <option value="openai/gpt-image-2">OpenAI — GPT Image 2 (Advanced Prompt Compliance)</option>
                 <option value="openai/dall-e-3">OpenAI — DALL-E 3 (Vector Layouts & Graphics)</option>
               </select>
             </div>
+
+            <div class="form-group" style="margin-top: 15px;">
+              <label style="color: var(--teal); font-weight: bold; letter-spacing: 0.05em;">⚡ Premium Imagen 3 Presets</label>
+              <div class="preset-grid">
+                <div class="preset-card" onclick="applyPreset('food')">
+                  <span class="preset-badge">Pro</span>
+                  <div class="preset-title">🥗 Editorial Food</div>
+                  <div class="preset-desc">Organic macro shots with fresh glistening details and shallow DOF.</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('cover')">
+                  <span class="preset-badge">Pro</span>
+                  <div class="preset-title">📘 Book Cover</div>
+                  <div class="preset-desc">Clean typographical layout with crisp serif text overlays.</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('cyberpunk')">
+                  <span class="preset-badge">Pro</span>
+                  <div class="preset-title">🌆 Cinematic City</div>
+                  <div class="preset-desc">Cyberpunk streetscape with anamorphic flares and neon glow.</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('vector')">
+                  <span class="preset-badge">Pro</span>
+                  <div class="preset-title">🎨 Modern Vector</div>
+                  <div class="preset-desc">Clean, isolated icon mockups with contrasting backing layers.</div>
+                </div>
+              </div>
+            </div>
+
             <div class="form-group">
               <label>Prompt Description</label>
-              <input type="text" id="image-prompt" class="glz-field" placeholder="Describe the scene layout parameters explicitly..." />
+              <textarea id="image-prompt" class="glz-field" style="height: 80px; resize: none;" placeholder="Describe the scene layout parameters explicitly or select a preset above..."></textarea>
             </div>
             <button id="img-btn" class="btn btn-primary" onclick="triggerImageForge()">Execute Immediate Generation</button>
             <div id="img-loading-status" style="display:none; font-family:var(--font-mono); font-size:11px; color:var(--amber); margin-top:10px;">
@@ -600,7 +634,6 @@ function getMiniAppHtml(env) {
               </select>
             </div>
 
-            <!-- Dynamic Pipeline Variables (Hidden by default unless Pipeline selected) -->
             <div id="pipeline-config-group" style="display: none; transition: opacity var(--t-base);">
               <div class="form-group">
                 <label>Target Audience Demographic</label>
@@ -636,7 +669,6 @@ function getMiniAppHtml(env) {
 
             <button id="social-btn" class="btn btn-primary" onclick="triggerSocialCompose()">Compose Social Assets</button>
 
-            <!-- Real-Time Pipeline Progress Tracker (Polled Dynamically) -->
             <div id="pipeline-tracker" class="progress-box" style="display: none;">
               <div class="progress-header">
                 <span id="tracker-step-title">Stage 0: Handshake</span>
@@ -681,6 +713,13 @@ function getMiniAppHtml(env) {
     WA.expand();
     WA.enableClosingConfirmation();
 
+    var uid = (WA.initDataUnsafe && WA.initDataUnsafe.user && WA.initDataUnsafe.user.id) ? WA.initDataUnsafe.user.id : 'anon';
+    var locale = (WA.initDataUnsafe && WA.initDataUnsafe.user && WA.initDataUnsafe.user.language_code) ? WA.initDataUnsafe.user.language_code : 'en';
+    var chatHistoryArr = [];
+
+    const EMERGING_LOCALES = ['pt', 'ru', 'hi', 'id', 'th', 'br', 'in'];
+    const isEmergingMarket = EMERGING_LOCALES.includes(locale.toLowerCase());
+
     function syncTelegramTheme() {
       var params = WA.themeParams;
       if (params && Object.keys(params).length > 0) {
@@ -699,8 +738,33 @@ function getMiniAppHtml(env) {
     syncTelegramTheme();
     WA.onEvent('themeChanged', syncTelegramTheme);
 
-    var uid = (WA.initDataUnsafe && WA.initDataUnsafe.user && WA.initDataUnsafe.user.id) ? WA.initDataUnsafe.user.id : 'anon';
-    var chatHistoryArr = [];
+    function applyArbitragePrices() {
+      if (isEmergingMarket) {
+        document.querySelector('.premium-banner-text').textContent = "⭐ REGIONAL TIER ACTIVE - IMAGEN 3 PRO";
+        document.getElementById('pipeline-tier').options[0].text = "Standard (Gemini Core) — ⭐ 5 Stars";
+        document.getElementById('pipeline-tier').options[1].text = "Pro (Gemma Pro Array) — ⭐ 12 Stars";
+        document.getElementById('pipeline-tier').options[2].text = "Premium (Imagen 3 High Definition) — ⭐ 25 Stars (50% Off)";
+        console.log("Arbitrage price modifiers applied to emerging local node:", locale);
+      }
+    }
+    applyArbitragePrices();
+
+    function applyPreset(type) {
+      const promptField = document.getElementById('image-prompt');
+      const selectModel = document.getElementById('image-model');
+      selectModel.value = "google/imagen-3";
+
+      const prompts = {
+        food: "A high-end, editorial food photography shot of a ceramic bowl filled with vibrant mixed salad greens, cucumber slices, and avocado. Fresh water droplets glistening on the leaves. Overhead macro lens angle, soft natural window side-light, shallow depth of field, neutral stone background, photorealistic 8k texture.",
+        cover: "A professional cookbook cover layout. In the center, a beautifully styled plate of artisan pasta. Across the top, clear readable text that says 'THE ART OF PASTA' in an elegant serif font. Across the bottom, smaller text that says 'By Chef Logiclemon'. Clean composition, rustic kitchen background, warm atmospheric lighting, sharp details.",
+        cyberpunk: "Cinematic cyberpunk streetscape, rain-slicked pavement reflecting neon teal and amber glowing storefront signs, atmospheric volumetric lighting, hyper-detailed textures, shot on anamorphic 35mm lens, high contrast, immersive composition.",
+        vector: "Flat continuous vector graphics layout icon, high contrast teal and heavy charcoal backing layers, sharp clean geometric edges, isolated background, highly scalable modern tech brand logo style."
+      };
+
+      promptField.value = prompts[type] || '';
+      toast('Imagen 3 preset style applied');
+      WA.HapticFeedback.impactOccurred('medium');
+    }
 
     const urlParams = new URLSearchParams(window.location.search);
     if(urlParams.get('auth') === 'success') {
@@ -791,7 +855,6 @@ function getMiniAppHtml(env) {
       } catch(err) { loader.style.display = 'none'; btn.disabled = false; tray.innerHTML = '<div class="result-area" style="color:var(--ember);">Connection Failed: ' + err.message + '</div>'; }
     }
 
-    // ── AUTOMATED PIPELINE LONG-POLLING ORCHESTRATOR ──
     async function triggerSocialCompose() {
       var tVal = document.getElementById('social-topic').value.trim(); if(!tVal) { WA.showAlert('Please frame a target creation topic focus point.'); return; }
       var platform = document.getElementById('social-platform').value;
@@ -819,7 +882,6 @@ function getMiniAppHtml(env) {
           btn.disabled = false;
         } catch(e) { box.textContent = 'Composition exception: ' + e.message; btn.disabled = false; }
       } else {
-        // Run full, multi-step asynchronous pipeline with UI feedback
         tracker.style.display = 'block';
         resetProgressUI();
         
@@ -832,13 +894,13 @@ function getMiniAppHtml(env) {
               lang: document.getElementById('pipeline-lang').value,
               tier: document.getElementById('pipeline-tier').value,
               audience: document.getElementById('pipeline-audience').value,
-              tg_user: uid
+              tg_user: uid,
+              locale: locale
             })
           });
           const startData = await startResp.json();
           if (!startData.success) throw new Error(startData.error || 'Failed to start pipeline cluster.');
 
-          // Polling thread execution
           pollPipelineStatus(startData.taskId);
         } catch (err) {
           tracker.style.display = 'none';
@@ -869,12 +931,10 @@ function getMiniAppHtml(env) {
           const step = task.step || 0;
           const status = task.status;
 
-          // Update Progress Indicator Elements
           const percentage = Math.round((step / 7) * 100);
           document.getElementById('tracker-step-percent').textContent = percentage + '%';
           document.getElementById('tracker-bar-fill').style.width = percentage + '%';
 
-          // Focus step highlighter
           for (let i = 1; i <= 7; i++) {
             const el = document.getElementById('pstep-' + i);
             if (i < step) {
@@ -893,7 +953,6 @@ function getMiniAppHtml(env) {
             document.getElementById('social-btn').disabled = false;
             WA.HapticFeedback.notificationOccurred('success');
             
-            // Format and expose pipeline results natively inside the client
             const res = task.result ? JSON.parse(task.result) : {};
             renderPipelineOutput(res);
           } else if (status === 'error') {

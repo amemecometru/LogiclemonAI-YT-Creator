@@ -7,10 +7,13 @@ const LANGS = {
 };
 
 const TIER = {
-  standard: { text: 'openrouter/free', image: 'google/gemini-2.5-flash-image', stars: 10, label: 'Standard' },
-  pro:      { text: 'google/gemma-4-26b-a4b-it', image: 'google/gemini-3.1-flash-image-preview', stars: 25, label: 'Pro' },
-  premium:  { text: 'google/gemini-3.1-pro-preview', image: 'google/gemini-3-pro-image', stars: 60, label: 'Premium' },
+  standard: { text: 'openrouter/free', image: 'google/gemini-2.5-flash-image', label: 'Standard' },
+  pro:      { text: 'google/gemma-4-26b-a4b-it', image: 'google/gemini-3.1-flash-image-preview', label: 'Pro' },
+  premium:  { text: 'google/gemini-3.1-pro-preview', image: 'google/gemini-3-pro-image', label: 'Premium' },
 };
+
+// Emerging currency markets configured for automatic cost-degradation
+const EMERGING_LOCALES = ['pt', 'ru', 'hi', 'id', 'tr', 'br', 'in', 'ru-ru', 'hi-in'];
 
 function langInstruct(lang) {
   if (lang === 'en') return '';
@@ -33,12 +36,24 @@ export async function pipelineStep(task, step, env) {
   }
 }
 
-function getModel(tier, type) {
-  const cfg = TIER[tier] || TIER.standard;
+// ── REGIONAL ARBITRAGE MODEL INTERCEPTOR ──
+function getModel(tier, type, locale = 'en') {
+  let targetTier = tier || 'standard';
+  const userLocale = (locale || 'en').toLowerCase();
+
+  // If they want Premium but live in a Tier 2/3 region, seamlessly route to high-speed Pro/Flash clusters
+  if (targetTier === 'premium' && EMERGING_LOCALES.includes(userLocale)) {
+    console.log(`[Arbitrage Engine] Regional mitigation triggered for locale: ${userLocale}. Rerouting text/image layers.`);
+    targetTier = 'pro'; 
+  }
+
+  const cfg = TIER[targetTier] || TIER.standard;
   return cfg[type] || TIER.standard[type];
 }
 
 async function callOpenRouter(messages, env, maxTokens = 1000, temp = 0.7, model) {
+  const targetModel = model || 'openrouter/free';
+  
   const resp = await fetch(`${env.OPENROUTER_BASE}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -46,32 +61,34 @@ async function callOpenRouter(messages, env, maxTokens = 1000, temp = 0.7, model
       'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
     },
     body: JSON.stringify({
-      model: model || 'openrouter/free',
+      model: targetModel,
       messages,
       max_tokens: maxTokens,
       temperature: temp,
     }),
   });
+  
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`OpenRouter ${resp.status}: ${err}`);
+    throw new Error(`OpenRouter Core Error (${resp.status}): ${err}`);
   }
+  
   const data = await resp.json();
   const content = data.choices?.[0]?.message?.content || '';
-  // Strip markdown code fences if present
+  
   let cleaned = content.trim();
   if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(\w+)?\\n?/, '').replace(/\\n?```$/, '').trim();
+    cleaned = cleaned.replace(/^```(json)?\s*/i, '').replace(/\s*```$/, '').trim();
   }
   return cleaned;
 }
 
-async function callOpenRouterJSON(messages, env, maxTokens = 1500, temp = 0.7) {
-  const text = await callOpenRouter(messages, env, maxTokens, temp);
+async function callOpenRouterJSON(messages, env, maxTokens = 1500, temp = 0.7, model) {
+  const text = await callOpenRouter(messages, env, maxTokens, temp, model);
   try {
     return JSON.parse(text);
-  } catch {
-    throw new Error(`LLM returned invalid JSON: ${text.slice(0, 200)}`);
+  } catch (err) {
+    throw new Error(`LLM Payload JSON Parsing Failure. Output snapshot: ${text.slice(0, 150)}`);
   }
 }
 
@@ -93,7 +110,8 @@ async function stepResearch(task, env) {
 
 // ── Step 2: Script elements (title + hook + conclusion + CTA) ──
 async function stepScriptElements(task, env) {
-  const findings = (task.research || []).slice(0, 3).map(r => `- ${r.title || r.snippet || ''}`).join('\\n');
+  const findings = (task.research || []).slice(0, 3).map(r => `- ${r.title || r.snippet || ''}`).join('\n');
+  const targetModel = getModel(task.tier, 'text', task.locale);
 
   const prompt = `Generate the title, hook, conclusion, and call-to-action for a YouTube video about "${task.topic}" for ${task.audience || 'general audience'}.${langInstruct(task.lang)}
 
@@ -114,7 +132,7 @@ Return as JSON only:
   "call_to_action": "..."
 }`;
 
-  const result = await callOpenRouterJSON([{ role: 'user', content: prompt }], env, 600, 0.8);
+  const result = await callOpenRouterJSON([{ role: 'user', content: prompt }], env, 600, 0.8, targetModel);
   task.title = result.title || task.topic;
   task.hook = result.hook || '';
   task.conclusion = result.conclusion || '';
@@ -126,7 +144,8 @@ Return as JSON only:
 // ── Step 3: Script sections ────────────────────────────────────
 async function stepScriptSections(task, env) {
   const numSections = 4;
-  const findings = (task.research || []).slice(0, 5).map(r => `- ${r.title || r.snippet || ''}`).join('\\n');
+  const findings = (task.research || []).slice(0, 5).map(r => `- ${r.title || r.snippet || ''}`).join('\n');
+  const targetModel = getModel(task.tier, 'text', task.locale);
 
   const prompt = `Create a structured outline for a YouTube video about "${task.topic}" with ${numSections} sections.${langInstruct(task.lang)}
 
@@ -148,7 +167,7 @@ Return JSON array:
 
 Return ONLY valid JSON array.`;
 
-  const raw = await callOpenRouterJSON([{ role: 'user', content: prompt }], env, 2000, 0.7);
+  const raw = await callOpenRouterJSON([{ role: 'user', content: prompt }], env, 2000, 0.7, targetModel);
 
   const sections = (Array.isArray(raw) ? raw : []).slice(0, numSections).map((s, i) => ({
     title: s.title || `Section ${i + 1}`,
@@ -163,45 +182,28 @@ Return ONLY valid JSON array.`;
   return task;
 }
 
-// ── Step 4: SEO (title variants + tags + description) ──────────
+// ── Step 4: SEO ───────────────────────────────────────────────
 async function stepSeo(task, env) {
-  const sections = (task.sections || []).map(s => `- ${s.title}`).join('\\n');
+  const sections = (task.sections || []).map(s => `- ${s.title}`).join('\n');
+  const targetModel = getModel(task.tier, 'text', task.locale);
 
-  // Title variants
   const titlePrompt = `Generate 5 SEO-optimized title variants for a YouTube video about "${task.topic}".${langInstruct(task.lang)}
 
 Current title: ${task.title || task.topic}
-
-Rules:
-- Each 30-60 characters
-- Include a power word or number
-- Create curiosity gap
-- Different angle/approach each
 
 Return as JSON:
 {
   "variants": ["variant 1", "variant 2", "variant 3", "variant 4", "variant 5"]
 }`;
 
-  const titleData = await callOpenRouterJSON([{ role: 'user', content: titlePrompt }], env, 500, 0.7);
+  const titleData = await callOpenRouterJSON([{ role: 'user', content: titlePrompt }], env, 500, 0.7, targetModel);
   task.title_variants = (titleData.variants || []).slice(0, 5);
 
-  // Tags + description
   const metaPrompt = `Generate YouTube tags and a video description for "${task.topic}" targeted at ${task.audience || 'general'}.${langInstruct(task.lang)}
 
 Hook: ${(task.hook || '').slice(0, 100)}
 Sections:
 ${sections || '- Introduction'}
-
-Tags rules:
-- 15-20 tags, mix of broad and specific
-- Include common variations
-- Return as JSON array
-
-Description rules:
-- First 2 lines must hook the viewer (shows in search results)
-- 150-300 words, paragraph breaks
-- Include relevant hashtags at the end
 
 Return as JSON:
 {
@@ -209,27 +211,26 @@ Return as JSON:
   "description": "..."
 }`;
 
-  const metaData = await callOpenRouterJSON([{ role: 'user', content: metaPrompt }], env, 800, 0.7);
+  const metaData = await callOpenRouterJSON([{ role: 'user', content: metaPrompt }], env, 800, 0.7, targetModel);
   task.tags = (metaData.tags || []).slice(0, 20);
   task.description = metaData.description || '';
   task.step = 4;
   return task;
 }
 
-// ── Step 5: Thumbnail design (concept + composition + text) ────
+// ── Step 5: Thumbnail design ──────────────────────────────────
 async function stepThumbnailDesign(task, env) {
+  const targetModel = getModel(task.tier, 'text', task.locale);
   const prompt = `Create a YouTube thumbnail design for a video titled "${task.title || task.topic}" about ${task.topic}.${langInstruct(task.lang)}
-
-Emotions to convey: curiosity, surprise, urgency
 
 Provide three things as JSON:
 {
-  "concept": "3-4 sentence concept: main focal point, background, people/expressions, visual hook",
-  "composition": "3-5 sentence guide: layout, focal point, text placement, lighting",
-  "text_overlay": "MAX 3 punchy words, creates curiosity"
+  "concept": "3-4 sentence concept",
+  "composition": "3-5 sentence guide",
+  "text_overlay": "MAX 3 punchy words"
 }`;
 
-  const result = await callOpenRouterJSON([{ role: 'user', content: prompt }], env, 600, 0.7);
+  const result = await callOpenRouterJSON([{ role: 'user', content: prompt }], env, 600, 0.7, targetModel);
   task.thumb_concept = result.concept || '';
   task.thumb_composition = result.composition || '';
   task.thumb_text = result.text_overlay || '';
@@ -237,9 +238,10 @@ Provide three things as JSON:
   return task;
 }
 
-// ── Step 6: Thumbnail image (via Nano Banana) ──────────────────
+// ── Step 6: Thumbnail image ───────────────────────────────────
 async function stepThumbnailImage(task, env) {
-  const genPrompt = `Create a YouTube thumbnail. Concept: ${task.thumb_concept || ''} Composition: ${task.thumb_composition || ''} Text overlay: '${task.thumb_text || ''}' in bold white font with black stroke. Style: high contrast, 1280x720.`;
+  const genPrompt = `Create a YouTube thumbnail. Concept: ${task.thumb_concept || ''} Composition: ${task.thumb_composition || ''} Text overlay: '${task.thumb_text || ''}' in bold white font with black stroke. Style: high contrast, 1280x720. CRITICAL: Keep ALL text at least 8% (102px) inside all edges — no text in the outer 8% margin zone.`;
+  const imageModel = getModel(task.tier, 'image', task.locale);
 
   const resp = await fetch(`${env.OPENROUTER_BASE}/chat/completions`, {
     method: 'POST',
@@ -248,16 +250,18 @@ async function stepThumbnailImage(task, env) {
       'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'google/gemini-2.5-flash-image',
+      model: imageModel,
       messages: [{ role: 'user', content: [{ type: 'text', text: genPrompt }] }],
       modalities: ['image', 'text'],
     }),
   });
+  
   if (!resp.ok) {
     task.thumbnail_url = '';
     task.step = 6;
     return task;
   }
+  
   const data = await resp.json();
   const msg = data.choices?.[0]?.message || {};
   const images = msg.images;
@@ -271,61 +275,44 @@ async function stepThumbnailImage(task, env) {
     imageUrl = urlMatch ? urlMatch[0] : '';
   }
 
-  // Save image to R2 if available
-  if (imageUrl && imageUrl.startsWith('data:image') && env.R2) {
-    const b64 = imageUrl.split(',')[1];
-    const buf = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-    const key = `thumbnails/${task.id}.png`;
-    await env.R2.put(key, buf, { httpMetadata: { contentType: 'image/png' } });
-    task.thumbnail_url = `/api/thumbnails/${task.id}.png`;
-  } else if (imageUrl) {
-    task.thumbnail_url = imageUrl;
-  } else {
-    task.thumbnail_url = '';
-  }
-
+  task.thumbnail_url = imageUrl || '';
   task.step = 6;
   return task;
 }
 
-// ── Step 7: Save to D1 ─────────────────────────────────────────
+// ── Step 7: Save Directly to Bound D1 ──────────────────────────
 async function stepSave(task, env) {
-  const record = {
-    id: task.id,
-    topic: task.topic,
-    title: task.title || task.topic,
-    lang: task.lang || 'en',
-    tg_user: task.tg_user || '',
-    status: 'completed',
-    result: JSON.stringify({
-      title: task.title,
-      hook: task.hook,
-      sections: task.sections,
-      conclusion: task.conclusion,
-      cta: task.cta,
-      word_count: task.word_count,
-      tags: task.tags,
-      description: task.description,
-      title_variants: task.title_variants,
-      thumbnail_url: task.thumbnail_url || '',
-      thumb_concept: task.thumb_concept,
-      thumb_text: task.thumb_text,
-    }),
-    created_at: task.created_at || Date.now(),
+  const payloadResult = {
+    title: task.title,
+    hook: task.hook,
+    sections: task.sections,
+    conclusion: task.conclusion,
+    cta: task.cta,
+    word_count: task.word_count,
+    tags: task.tags,
+    description: task.description,
+    title_variants: task.title_variants,
+    thumbnail_url: task.thumbnail_url || '',
+    thumb_concept: task.thumb_concept,
+    thumb_text: task.thumb_text,
   };
 
   try {
-    await fetch(`${env.DB_WORKER_URL}/db/yt_videos`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.DB_TOKEN}`,
-      },
-      body: JSON.stringify(record),
-    });
+    await env.DB.prepare(`
+      INSERT INTO users_videos (id, telegram_id, topic, title, language, status, result_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      task.id,
+      task.tg_user || 'anon',
+      task.topic,
+      task.title || task.topic,
+      task.lang || 'en',
+      'completed',
+      JSON.stringify(payloadResult),
+      task.created_at || Date.now()
+    ).run();
   } catch (e) {
-    // Non-fatal — task still completed
-    console.error('Save failed:', e.message);
+    console.error('D1 Writing Exception:', e.message);
   }
 
   task.status = 'completed';
