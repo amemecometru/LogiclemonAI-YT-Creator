@@ -1,33 +1,35 @@
-name = "tg"
+name = "dipdesigns-tg"
 main = "src/index.js"
-compatibility_date = "2025-06-01"
-account_id = "8a460817bc554362e040644c8e003fb9"
+compatibility_date = "2026-06-11"
 
-# D1 for task state + user history
-[[d1_databases]]
-binding = "DB"
-database_name = "logiclemonai-db"
-database_id = "49e1e775-6d6d-4735-89ea-487da5cf2e33"
+[placement]
+mode = "smart"
 
-# R2 for thumbnails — enable at cloudflare.com/r2 then uncomment:
-# [[r2_buckets]]
-# binding = "R2"
-# bucket_name = "logiclemonai-tg"
+[[r2_buckets]]
+binding = "THUMBS"
+bucket_name = "dipdesigns-thumbs"
 
 [[kv_namespaces]]
 binding = "TASKS"
 id = "ba826c0ef6b24a8cba5d68270905ec64"
 
-[vars]
-OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-# Deploy the other workers first, then replace the URLs below:
-RESEARCH_WORKER_URL = "https://logiclemonai-research.logiclemonai.workers.dev"
-DB_WORKER_URL = "https://logiclemonai-db.logiclemonai.workers.dev"
+[[kv_namespaces]]
+binding = "WEBHOOKS_KV"
+id = "5b35c96a0bdd418685bfb6ce68884acd"
 
-# Secrets (wrangler secret put):
-# BOT_TOKEN              — from @BotFather
-# OPENROUTER_API_KEY     — sk-or-... (from openrouter.ai/keys)
-# RESEARCH_TOKEN         — API_TOKEN secret from research-worker
-# DB_TOKEN               — API_TOKEN secret from db-worker
-# OPENAI_API_KEY         - API_KEY from OpenAI
-# BFL_API_KEY            - API_KEY from Black Forest Labs
+[[d1_databases]]
+binding = "DB"
+database_name = "dipdesigns-db"
+database_id = "e36e0a43-72c1-447c-98a8-37ebc6acfbbb"
+
+[[durable_objects.bindings]]
+name = "SESSION_HUB"
+class_name = "SessionHubV2"
+
+[[durable_objects.bindings]]
+name = "CREDIT_LEDGER"
+class_name = "CreditLedgerV2"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["SessionHubV2", "CreditLedgerV2"]

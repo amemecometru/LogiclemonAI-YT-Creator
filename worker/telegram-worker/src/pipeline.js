@@ -12,8 +12,8 @@ const TIER = {
   premium:  { text: 'google/gemini-3.1-pro-preview', image: 'google/gemini-3-pro-image', label: 'Premium' },
 };
 
-// Emerging currency markets configured for automatic cost-degradation
-const EMERGING_LOCALES = ['pt', 'ru', 'hi', 'id', 'tr', 'br', 'in', 'ru-ru', 'hi-in'];
+// Emerging currency markets configured for Dynamic Model degradation
+const EMERGING_LOCALES = ['pt', 'ru', 'hi', 'id', 'th', 'br', 'in'];
 
 function langInstruct(lang) {
   if (lang === 'en') return '';
@@ -36,14 +36,16 @@ export async function pipelineStep(task, step, env) {
   }
 }
 
-// ── REGIONAL ARBITRAGE MODEL INTERCEPTOR ──
+// ── REGIONAL ARBITRAGE ENFORCER ──
+// If a user belongs to an emerging market locale, their premium text requests are
+// automatically rerouted to a high-speed gemma or flash model to save 95% on API costs.
 function getModel(tier, type, locale = 'en') {
   let targetTier = tier || 'standard';
   const userLocale = (locale || 'en').toLowerCase();
 
-  // If they want Premium but live in a Tier 2/3 region, seamlessly route to high-speed Pro/Flash clusters
   if (targetTier === 'premium' && EMERGING_LOCALES.includes(userLocale)) {
-    console.log(`[Arbitrage Engine] Regional mitigation triggered for locale: ${userLocale}. Rerouting text/image layers.`);
+    // Dynamic degradation fallback: Downgrade from expensive Gemini Pro to Gemma/Flash
+    console.log(`Regional arbitrage triggered for ${userLocale}. Rerouting premium compute tier.`);
     targetTier = 'pro'; 
   }
 
@@ -78,7 +80,7 @@ async function callOpenRouter(messages, env, maxTokens = 1000, temp = 0.7, model
   
   let cleaned = content.trim();
   if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    cleaned = cleaned.replace(/^```(?:json|xml)?\s*/i, '').replace(/\s*```$/, '').trim();
   }
   return cleaned;
 }
@@ -182,7 +184,7 @@ Return ONLY valid JSON array.`;
   return task;
 }
 
-// ── Step 4: SEO ───────────────────────────────────────────────
+// ── Step 4: SEO (title variants + tags + description) ──────────
 async function stepSeo(task, env) {
   const sections = (task.sections || []).map(s => `- ${s.title}`).join('\n');
   const targetModel = getModel(task.tier, 'text', task.locale);
@@ -190,6 +192,12 @@ async function stepSeo(task, env) {
   const titlePrompt = `Generate 5 SEO-optimized title variants for a YouTube video about "${task.topic}".${langInstruct(task.lang)}
 
 Current title: ${task.title || task.topic}
+
+Rules:
+- Each 30-60 characters
+- Include a power word or number
+- Create curiosity gap
+- Different angle/approach each
 
 Return as JSON:
 {
@@ -205,6 +213,16 @@ Hook: ${(task.hook || '').slice(0, 100)}
 Sections:
 ${sections || '- Introduction'}
 
+Tags rules:
+- 15-20 tags, mix of broad and specific
+- Include common variations
+- Return as JSON array
+
+Description rules:
+- First 2 lines must hook the viewer (shows in search results)
+- 150-300 words, paragraph breaks
+- Include relevant hashtags at the end
+
 Return as JSON:
 {
   "tags": ["tag1", "tag2", ...],
@@ -218,16 +236,18 @@ Return as JSON:
   return task;
 }
 
-// ── Step 5: Thumbnail design ──────────────────────────────────
+// ── Step 5: Thumbnail design (concept + composition + text) ────
 async function stepThumbnailDesign(task, env) {
   const targetModel = getModel(task.tier, 'text', task.locale);
   const prompt = `Create a YouTube thumbnail design for a video titled "${task.title || task.topic}" about ${task.topic}.${langInstruct(task.lang)}
 
+Emotions to convey: curiosity, surprise, urgency
+
 Provide three things as JSON:
 {
-  "concept": "3-4 sentence concept",
-  "composition": "3-5 sentence guide",
-  "text_overlay": "MAX 3 punchy words"
+  "concept": "3-4 sentence concept: main focal point, background, people/expressions, visual hook",
+  "composition": "3-5 sentence guide: layout, focal point, text placement, lighting",
+  "text_overlay": "MAX 3 punchy words, creates curiosity"
 }`;
 
   const result = await callOpenRouterJSON([{ role: 'user', content: prompt }], env, 600, 0.7, targetModel);
@@ -238,9 +258,32 @@ Provide three things as JSON:
   return task;
 }
 
-// ── Step 6: Thumbnail image ───────────────────────────────────
+// ── Step 6: Thumbnail image (via Multimodal Engine Array with Safe-Zone Margins) ──
 async function stepThumbnailImage(task, env) {
-  const genPrompt = `Create a YouTube thumbnail. Concept: ${task.thumb_concept || ''} Composition: ${task.thumb_composition || ''} Text overlay: '${task.thumb_text || ''}' in bold white font with black stroke. Style: high contrast, 1280x720. CRITICAL: Keep ALL text at least 8% (102px) inside all edges — no text in the outer 8% margin zone.`;
+  let styleDirective = "";
+  const style = task.thumb_style || "minimal";
+
+  if (style === "creator") {
+    styleDirective = "Style Aesthetic: Clean Creator Close-Up. Features one clear, well-lit human subject showing a high-intensity facial expression (curiosity, skepticism) on the left side of the frame. The background is a clean, low-opacity dark gradient with highly dramatic split-lighting.";
+  } else if (style === "minimal") {
+    styleDirective = "Style Aesthetic: Minimal Object + Halo Glow. Features a single, hyper-clean central item (like a glowing server node or product mockup) surrounded by a vibrant volumetric neon blue halo. Massive negative space frames the glowing focal point.";
+  } else if (style === "contrast") {
+    styleDirective = "Style Aesthetic: The 3-Color Contrast Rule. Strictly limit the entire canvas to exactly three colors—one deep charcoal dark-mode backing layer, one bright Neon Teal primary accent, and one vibrant Ember Red secondary details accent.";
+  }
+
+  const genPrompt = `Create a high-definition 16:9 YouTube thumbnail. 
+Concept: ${task.thumb_concept || ''} 
+Composition: ${task.thumb_composition || ''} 
+${styleDirective}
+
+Text overlay: Render the text "${task.thumb_text || ''}" in a massive, bold white font with a heavy black outline.
+
+CRITICAL DESIGN SAFETY ZONE RULES:
+- Enforce an 8% outer border margin. Leave the outer 8% of the canvas completely blank.
+- All text overlays, subjects, and main graphic objects must reside strictly inside the inner 84% safe zone.
+- Keep the bottom-right corner completely empty (to prevent YouTube duration stamp overlaps).
+- The text overlay must be fully legible, spelled out completely without any word wrapping or character truncation.`;
+
   const imageModel = getModel(task.tier, 'image', task.locale);
 
   const resp = await fetch(`${env.OPENROUTER_BASE}/chat/completions`, {
@@ -275,12 +318,23 @@ async function stepThumbnailImage(task, env) {
     imageUrl = urlMatch ? urlMatch[0] : '';
   }
 
-  task.thumbnail_url = imageUrl || '';
+  if (imageUrl && imageUrl.startsWith('data:image') && env.THUMBS) {
+    const b64 = imageUrl.split(',')[1];
+    const buf = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const key = `thumbnails/${task.id}.png`;
+    await env.THUMBS.put(key, buf, { httpMetadata: { contentType: 'image/png' } });
+    task.thumbnail_url = `/api/thumbnails/${task.id}.png`;
+  } else if (imageUrl) {
+    task.thumbnail_url = imageUrl;
+  } else {
+    task.thumbnail_url = '';
+  }
+
   task.step = 6;
   return task;
 }
 
-// ── Step 7: Save Directly to Bound D1 ──────────────────────────
+// ── Step 7: Consolidated Direct Save to Bound Cloudflare D1 ──
 async function stepSave(task, env) {
   const payloadResult = {
     title: task.title,
@@ -297,6 +351,8 @@ async function stepSave(task, env) {
     thumb_text: task.thumb_text,
   };
 
+  const timestamp = Date.now();
+
   try {
     await env.DB.prepare(`
       INSERT INTO users_videos (id, telegram_id, topic, title, language, status, result_payload, created_at)
@@ -309,10 +365,11 @@ async function stepSave(task, env) {
       task.lang || 'en',
       'completed',
       JSON.stringify(payloadResult),
-      task.created_at || Date.now()
+      task.created_at || timestamp
     ).run();
+
   } catch (e) {
-    console.error('D1 Writing Exception:', e.message);
+    console.error('Edge D1 Pipeline Writing Exception Caught:', e.message);
   }
 
   task.status = 'completed';

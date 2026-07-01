@@ -1,5 +1,57 @@
 import { pipelineStep } from './pipeline.js';
 
+// ── DURABLE OBJECTS EXPORT CLASSES ──
+export class SessionHubV2 {
+  constructor(state, env) {
+    this.state = state;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/set') {
+      const { sessionData } = await request.json();
+      await this.state.storage.put('session', sessionData);
+      return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.pathname === '/get') {
+      const sessionData = await this.state.storage.get('session') || null;
+      return new Response(JSON.stringify({ sessionData }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('SessionHub Active');
+  }
+}
+
+export class CreditLedgerV2 {
+  constructor(state, env) {
+    this.state = state;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/get') {
+      const balance = await this.state.storage.get('balance') || 0;
+      return new Response(JSON.stringify({ balance }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.pathname === '/add') {
+      const { amount } = await request.json();
+      let balance = await this.state.storage.get('balance') || 0;
+      balance += amount;
+      await this.state.storage.put('balance', balance);
+      return new Response(JSON.stringify({ balance }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.pathname === '/deduct') {
+      const { amount } = await request.json();
+      let balance = await this.state.storage.get('balance') || 0;
+      if (balance < amount) {
+        return new Response(JSON.stringify({ error: 'Insufficient balance', balance }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      balance -= amount;
+      await this.state.storage.put('balance', balance);
+      return new Response(JSON.stringify({ balance }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('CreditLedger Active');
+  }
+}
+
+// ── MASTER FETCH ROUTER ENTRYPOINT ──
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -34,8 +86,8 @@ export default {
     // ── R2 STORAGE IMAGE SERVING ROUTE ──
     if (path.startsWith('/api/thumbnails/') && request.method === 'GET') {
       const id = path.split('/').pop().replace('.png', '');
-      if (env.R2) {
-        const object = await env.R2.get(`thumbnails/${id}.png`);
+      if (env.THUMBS) {
+        const object = await env.THUMBS.get(`thumbnails/${id}.png`);
         if (object) {
           const headers = new Headers();
           object.writeHttpMetadata(headers);
@@ -48,7 +100,7 @@ export default {
 
     // ── PIPELINE ROUTE A: PIPELINE KICKOFF WITH ARBITRAGE ARRAYS ──
     if (path === '/api/pipeline/start' && request.method === 'POST') {
-      const { topic, lang = 'en', tier = 'standard', audience = 'general', tg_user = 'anon', locale = 'en' } = await request.json();
+      const { topic, lang = 'en', tier = 'standard', audience = 'general', tg_user = 'anon', locale = 'en', thumb_style = 'minimal' } = await request.json();
       if (!topic) return cors({ error: 'Creation topic required to start pipeline' }, 400);
 
       const taskId = crypto.randomUUID();
@@ -60,6 +112,7 @@ export default {
         audience,
         tg_user,
         locale, // Passed to pipeline.js to authorize automatic regional pricing downgrades
+        thumb_style,
         step: 0,
         status: 'processing',
         created_at: Date.now()
@@ -149,7 +202,7 @@ export default {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
             code,
-            client_id: {env: env.GOOGLE_CLIENT_ID},
+            client_id: env.GOOGLE_CLIENT_ID,
             client_secret: env.GOOGLE_CLIENT_SECRET,
             redirect_uri: redirectUri,
             grant_type: 'authorization_code',
@@ -419,11 +472,15 @@ function getMiniAppHtml(env) {
   .roadmap-num { font-family: var(--font-mono); font-size: 10px; color: var(--teal); text-transform: uppercase; margin-bottom: 4px; font-weight: 700; }
   .roadmap-title { font-size: 14px; font-weight: 600; color: var(--ink-on-dark); margin-bottom: 2px; }
   .roadmap-desc { font-size: 12px; color: var(--ink-on-dark-dim); }
-  .carousel-wrapper { overflow-x: auto; display: flex; gap: 10px; padding-bottom: 10px; margin-bottom: 25px; scrollbar-width: none; }
+  
+  .carousel-wrapper { overflow-x: auto; display: flex; gap: 12px; padding-bottom: 12px; margin-bottom: 25px; scrollbar-width: none; }
   .carousel-wrapper::-webkit-scrollbar { display: none; }
-  .carousel-card { flex: 0 0 85%; background: rgba(0,0,0,0.4); border: 1px solid var(--line-dark); padding: 14px; border-radius: var(--r-md); }
-  .carousel-tag { font-family: var(--font-mono); font-size: 8px; color: var(--amber); text-transform: uppercase; margin-bottom: 6px; }
+  .carousel-card { flex: 0 0 85%; background: rgba(0,0,0,0.45); border: 1px solid var(--line-dark); padding: 14px; border-radius: var(--r-md); display: flex; flex-direction: column; gap: 8px; cursor: pointer; transition: border-color var(--t-base); }
+  .carousel-card:hover { border-color: var(--teal-soft); }
+  .carousel-tag { font-family: var(--font-mono); font-size: 8px; color: var(--amber); text-transform: uppercase; font-weight: bold; }
   .carousel-prompt { font-family: var(--font-mono); font-size: 11px; color: var(--metal-1); line-height: 1.4; background: rgba(0,0,0,0.3); padding: 8px; border-radius: var(--r-sm); }
+  .carousel-img { width: 100%; height: 120px; border-radius: 6px; object-fit: cover; border: 1px solid rgba(255,255,255,0.05); }
+
   .resource-card { background: rgba(4,8,14,0.6); border: 1px solid var(--line-dark); padding: 16px; border-radius: var(--r-lg); margin-bottom: 20px; }
   .resource-card h3 { font-size: 14px; color: var(--ink-on-dark); margin-bottom: 8px; font-weight: 700; }
   .resource-text { font-size: 12px; color: var(--ink-on-dark-dim); line-height: 1.4; }
@@ -453,18 +510,6 @@ function getMiniAppHtml(env) {
   .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:3000; padding:10px 16px; border-radius:var(--r-md); font-family:var(--font-mono); font-size:11px; color:var(--teal); background:var(--glazier-glass-2); border:1px solid var(--teal-soft);}
   .footer{padding:20px 0; text-align:center; font-family:var(--font-mono); font-size:9px; color:var(--ink-on-dark-dim); border-top: 1px solid rgba(255,255,255,0.03); margin-top: 15px;}
 
-  .progress-box { margin-top: 15px; padding: 14px; background: rgba(0,0,0,0.45); border: 1px solid var(--line-dark); border-radius: var(--r-md); }
-  .progress-header { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--teal); margin-bottom: 8px; font-weight: bold;}
-  .progress-bar-bg { width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
-  .progress-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, var(--teal), var(--teal-bright)); transition: width 0.4s ease; }
-  .step-list { display: flex; flex-direction: column; gap: 6px; }
-  .step-item { display: flex; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--ink-on-dark-dim); }
-  .step-item.active { color: var(--teal); font-weight: 700; }
-  .step-item.completed { color: var(--teal-bright); opacity: 0.6; }
-  .step-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-on-dark-dim); }
-  .step-item.active .step-dot { background: var(--teal); box-shadow: 0 0 8px var(--teal); }
-  .step-item.completed .step-dot { background: var(--teal-bright); }
-
   .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; margin-bottom: 15px; }
   .preset-card { background: rgba(255,255,255,0.02); border: 1px solid var(--line-dark); border-radius: var(--r-md); padding: 10px; cursor: pointer; transition: all var(--t-base) var(--ease); text-align: left; position: relative; }
   .preset-card:hover { background: rgba(63,224,208,0.06); border-color: var(--teal); transform: translateY(-1px); }
@@ -486,6 +531,7 @@ function getMiniAppHtml(env) {
       </div>
     </div>
 
+    <!-- ── INTERFACE COMPONENT A: ONBOARDING & LANDING PAGE ── -->
     <div class="wrap" id="landing-portal">
       <header class="brand-hero">
         <h1 class="logo">Logiclemon<em>AI</em></h1>
@@ -524,12 +570,25 @@ function getMiniAppHtml(env) {
         </div>
       </div>
 
+      <!-- ── YT INSPIRATION LAB COMPONENT (EXPOSING R2 presests dynamically) ── -->
       <div class="resource-card">
-        <h3>⚡ Visual Inspiration Lab</h3>
+        <h3>⚡ Visual Inspiration Lab (2026 Trends)</h3>
+        <p class="resource-text" style="margin-bottom: 10px;">Tap a dynamic workspace visual style to load its prompt properties instantly:</p>
         <div class="carousel-wrapper">
-          <div class="carousel-card">
-            <div class="carousel-tag">Cinematic Realism</div>
-            <div class="carousel-prompt">"Cinematic cyberpunk streetscape, neon teal accents, hyper-detailed 8k texture, shot on 35mm lens, atmospheric volumetric lighting"</div>
+          <div class="carousel-card" onclick="applyInspoPreset('popart')">
+            <span class="carousel-tag">Pop Art Collage (SaaS Faceless)</span>
+            <img src="/inspo/popart-thumb1.png" class="carousel-img" alt="Popart">
+            <div class="carousel-prompt">"Vibrant pop art contrast framing, deep charcoal isolated background, bold neon overlays"</div>
+          </div>
+          <div class="carousel-card" onclick="applyInspoPreset('cyber')">
+            <span class="carousel-tag">Cinematic Realism (Clean Creator)</span>
+            <img src="/inspo/style-thumb1.jpg" class="carousel-img" alt="Cyber">
+            <div class="carousel-prompt">"Cinematic edge-lit creator shot, depth-of-field volumetric halo bokeh"</div>
+          </div>
+          <div class="carousel-card" onclick="applyInspoPreset('music')">
+            <span class="carousel-tag">Vibrant Acoustic (High CTR)</span>
+            <img src="/inspo/music-thumb1.jpg" class="carousel-img" alt="Music">
+            <div class="carousel-prompt">"Warm acoustic layout with rich wood textures, clean 3D text overlays"</div>
           </div>
         </div>
       </div>
@@ -539,6 +598,7 @@ function getMiniAppHtml(env) {
       </div>
     </div>
 
+    <!-- ── INTERFACE COMPONENT B: MAIN CREATION WORKSPACE ── -->
     <div class="wrap" id="studio-workspace" style="display: none; opacity: 0; transition: opacity var(--t-base) var(--ease);">
       <header class="brand-hero">
         <h1 class="logo">Logiclemon<em>AI</em></h1>
@@ -660,6 +720,16 @@ function getMiniAppHtml(env) {
                   </select>
                 </div>
               </div>
+
+              <!-- ── 2026 THUMBNAIL AESTHETIC DIRECTIVE DROPDOWN ── -->
+              <div class="form-group" style="margin-top: 10px;">
+                <label style="color: var(--teal); font-weight: bold;">⚡ 2026 Thumbnail Aesthetic Style</label>
+                <select id="pipeline-thumb-style" class="glz-field">
+                  <option value="creator" selected>Clean Creator Close-Up (Volumetric & Depth Sentiment)</option>
+                  <option value="minimal">Minimal Object + Halo Glow (Negative Space Framing)</option>
+                  <option value="contrast">The 3-Color Contrast Rule (High-Legibility Neon Accent)</option>
+                </select>
+              </div>
             </div>
 
             <div class="form-group">
@@ -763,6 +833,24 @@ function getMiniAppHtml(env) {
 
       promptField.value = prompts[type] || '';
       toast('Imagen 3 preset style applied');
+      WA.HapticFeedback.impactOccurred('medium');
+    }
+
+    // ── APPLY PRESETS FROM DYNAMIC INSPIRATION LAB ──
+    function applyInspoPreset(style) {
+      const promptField = document.getElementById('image-prompt');
+      const selectModel = document.getElementById('image-model');
+      selectModel.value = "google/imagen-3";
+
+      const prompts = {
+        popart: "High-contrast pop art collage with a single central visual object. Vibrant contrasting background featuring dark charcoal accents, abstract vector graphic elements, retro comic-book dotted halftone overlays, sharp edges, neon cyan details.",
+        cyber: "Cinematic close-up of a creator sitting in a server-room workspace, dramatic blue and orange cinematic split lighting, ultra-realistic skin textures, soft atmospheric background depth-of-field halo, shot on 35mm.",
+        music: "Vibrant acoustic travel layout showing a high-fidelity close-up of an acoustic guitar, rich polished wood textures, glowing warm gradient halo in the background, negative space for bold readable title overlay text."
+      };
+
+      promptField.value = prompts[style] || '';
+      toast('Inspiration style preset applied! Open Image Lab to execute.');
+      switchTab('images');
       WA.HapticFeedback.impactOccurred('medium');
     }
 
@@ -895,7 +983,8 @@ function getMiniAppHtml(env) {
               tier: document.getElementById('pipeline-tier').value,
               audience: document.getElementById('pipeline-audience').value,
               tg_user: uid,
-              locale: locale
+              locale: locale,
+              thumb_style: document.getElementById('pipeline-thumb-style').value
             })
           });
           const startData = await startResp.json();
